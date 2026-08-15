@@ -278,6 +278,52 @@ export interface CareJourneySnapshot {
     consent_requirement: string;
     network_status: "unknown";
   }[];
+  current_plan: string;
+  current_plan_name: string;
+  current_plan_options: {
+    plan_id: string;
+    plan_name: string;
+    coverage_status: "current";
+    hospital_id: number;
+    hospital: string;
+    address: string | null;
+    procedure_code: string;
+    published_typical_rate: number;
+    published_low_rate: number;
+    published_high_rate: number;
+    estimated_member_cost: number;
+    estimated_annual_total: number;
+    deductible_remaining: number;
+    coinsurance_rate: number;
+    network_status: "pending_verification";
+    estimate_status: "scenario_not_guarantee";
+    source_page_url: string | null;
+    rate_published_at: string | null;
+  }[];
+  alternative_plan: {
+    plan_id: string;
+    plan_name: string;
+    hospital_id: number;
+    hospital: string;
+    estimated_member_cost: number;
+    estimated_annual_total: number;
+    estimated_annual_savings: number;
+    requires_plan_switch: true;
+    action_status: "exploration_only";
+  } | null;
+  selected_care_path: {
+    plan_id: string;
+    plan_name: string;
+    coverage_status: "current";
+    hospital_id: number;
+    hospital: string;
+    procedure_code: string;
+    published_typical_rate: number;
+    estimated_member_cost: number;
+    network_status: "pending_verification" | "sandbox_verified";
+    selected_at: string;
+    booking_consent: boolean;
+  } | null;
   receipts: {
     action: string;
     status: string;
@@ -492,6 +538,12 @@ export const api = {
 
   journeyCompare: (journeyId: string) =>
     req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/compare`, { method: "POST" }),
+
+  journeySelectCurrentPath: (journeyId: string, hospitalId: number) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/selection`, {
+      method: "POST",
+      body: JSON.stringify({ hospital_id: hospitalId }),
+    }),
 
   journeyMatchingReason: (journeyId: string, question?: string) =>
     req<{ reason: string; journey: CareJourneySnapshot }>(`/api/journeys/${encodeURIComponent(journeyId)}/matching-reason`, {

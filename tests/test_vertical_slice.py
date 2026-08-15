@@ -44,6 +44,46 @@ class VerticalSliceTests(TestCase):
         self.assertEqual(event.payload["facility_count"], 1)
         self.assertEqual(event.payload["network_status"], "unknown")
 
+    def test_selecting_current_plan_hospital_skips_enrollment(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "MRI knee", code, "HCPCS",
+                    1, 500, 500, 500, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        journey = CareJourney.open(
+            "journey-current-path", hospital_knowledge=FakeHospitalKnowledge()
+        )
+        journey.record_fact(DecisionFact(
+            "procedure_code", "73721", "procedure_catalog", datetime.now(UTC),
+            1.0, VerificationStatus.VERIFIED,
+        ))
+        journey.record_consent(
+            ConsentAction.PROCESS_DOCUMENTS, approved=True, scope="seeded documents"
+        )
+        journey.advance()
+        journey.compare(["continuation", "wa-plan-b"])
+        journey.advance()
+        choice = journey.select_current_care_path(10)
+
+        self.assertEqual(choice.plan_id, "continuation")
+        self.assertEqual(choice.hospital, "Hospital A")
+        self.assertEqual(choice.network_status, "pending_verification")
+        self.assertEqual(journey.stage, WorkflowStage.VERIFY)
+        self.assertFalse(choice.booking_consent)
+
+        scope = "Dr. Lee / Hospital A / Continuation PPO"
+        journey.record_consent(
+            ConsentAction.SHARE_WITH_PROVIDER, approved=True, scope=scope
+        )
+        journey.execute(ConsentAction.SHARE_WITH_PROVIDER, scope, "verify-current-path")
+        self.assertEqual(journey.selected_care_path.network_status, "sandbox_verified")
+
     def test_onboarding_agent_is_orchestrated_into_fact_ledger(self) -> None:
         class FakeModel:
             def chat(self, messages, **kwargs):

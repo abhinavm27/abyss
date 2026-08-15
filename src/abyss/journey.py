@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .adapters import ActionReceipt, SandboxAdapters
 from .agents import KnowledgeAgent, MatchingAgent, OnboardingAgent
 from .catalogs import SeededCatalog
+from .care_paths import (
+    AlternativePlanScenario,
+    CarePathSelection,
+    HospitalCareOption,
+    build_alternative_scenario,
+    build_hospital_options,
+)
 from .domain import CareState, ConsentAction, DecisionFact, VerificationStatus
 from .evaluation import PathEvaluation, evaluate, rank
 from .knowledge import (
@@ -38,6 +45,10 @@ class CareJourney:
     matching_reason: str | None = None
     hospital_knowledge: HospitalKnowledgeCatalog = field(default_factory=NoHospitalKnowledgeCatalog)
     hospital_rates: list[PublishedHospitalRate] = field(default_factory=list)
+    current_plan_id: str = "continuation"
+    current_plan_options: list[HospitalCareOption] = field(default_factory=list)
+    alternative_plan: AlternativePlanScenario | None = None
+    selected_care_path: CarePathSelection | None = None
     memory: FactLedger = field(default_factory=FactLedger)
     audit: AuditLedger = field(default_factory=AuditLedger)
 
@@ -125,6 +136,24 @@ class CareJourney:
             },
         )
         self.evaluations = rank([evaluate(self.catalogs.plan(plan_id), provider) for plan_id in request.plan_ids])
+        current_plan = self.catalogs.plan(self.current_plan_id)
+        self.current_plan_options = build_hospital_options(
+            current_plan,
+            self.hospital_rates,
+            coverage_status="current",
+        )
+        feasible_alternatives = [
+            item for item in self.evaluations
+            if item.feasible and item.plan_id != self.current_plan_id
+        ]
+        self.alternative_plan = None
+        if self.current_plan_options and feasible_alternatives:
+            alternative = self.catalogs.plan(feasible_alternatives[0].plan_id)
+            self.alternative_plan = build_alternative_scenario(
+                alternative,
+                self.hospital_rates,
+                self.current_plan_options[0].estimated_annual_total,
+            )
         self.audit.append(self.journey_id, "matching_requested", actor="matching_agent",
                           payload={"plan_ids": list(request.plan_ids), "provider_id": request.provider_id})
         self.audit.append(self.journey_id, "evaluation_completed", actor="engine",
@@ -132,11 +161,57 @@ class CareJourney:
                                    "feasible_count": sum(item.feasible for item in self.evaluations)})
         return self.evaluations
 
+    def select_current_care_path(self, hospital_id: int) -> CarePathSelection:
+        if self.stage != WorkflowStage.RECOMMEND:
+            raise RuntimeError("a care path can only be selected from recommendation")
+        option = next(
+            (item for item in self.current_plan_options if item.hospital_id == hospital_id),
+            None,
+        )
+        if option is None:
+            raise RuntimeError("hospital is not an available current-plan option")
+        self.selected_care_path = CarePathSelection.from_option(option)
+        self.audit.append(
+            self.journey_id,
+            "care_path_selected",
+            actor="user",
+            payload={
+                "plan_id": option.plan_id,
+                "coverage_status": option.coverage_status,
+                "hospital_id": option.hospital_id,
+                "hospital": option.hospital,
+                "network_status": option.network_status,
+            },
+        )
+        next_stage = self.workflow.continue_current_coverage()
+        self.audit.append(
+            self.journey_id,
+            "stage_advanced",
+            actor="engine",
+            payload={"stage": next_stage.value, "path": "keep_current_coverage"},
+        )
+        return self.selected_care_path
+
     def explain_matching(self, question: str = "Why did these care paths pass or fail?") -> str:
         """Optional model explanation; never required for deterministic comparison."""
         if not self.evaluations:
             raise RuntimeError("comparison must run before matching explanation")
-        self.matching_reason = self.matching_agent.reason_about_evaluation(self.evaluations, question=question)
+        self.matching_reason = self.matching_agent.reason_about_evaluation(
+            self.evaluations,
+            question=question,
+            care_path_context={
+                "current_plan": self.catalogs.plan(self.current_plan_id).name,
+                "current_plan_options": [item.as_dict() for item in self.current_plan_options],
+                "alternative_plan": (
+                    self.alternative_plan.as_dict() if self.alternative_plan else None
+                ),
+                "limitations": [
+                    "published rate is not confirmed plan allowed amount",
+                    "network status pending verification",
+                    "alternative requires separate eligibility and switching flow",
+                ],
+            },
+        )
         self.audit.append(self.journey_id, "matching_explanation_completed", actor="matching_agent",
                           payload={"model_backed": True, "evaluation_count": len(self.evaluations)})
         return self.matching_reason
@@ -165,5 +240,15 @@ class CareJourney:
         receipt = self.adapters.execute(action.value, self.journey_id, scope, idempotency_key)
         if not any(item.idempotency_key == idempotency_key for item in self.receipts):
             self.receipts.append(receipt)
+        if self.selected_care_path and action == ConsentAction.SHARE_WITH_PROVIDER:
+            self.selected_care_path = replace(
+                self.selected_care_path,
+                network_status="sandbox_verified",
+            )
+        if self.selected_care_path and action == ConsentAction.BOOK_APPOINTMENT:
+            self.selected_care_path = replace(
+                self.selected_care_path,
+                booking_consent=True,
+            )
         self.audit.append(self.journey_id, "sandbox_receipt", actor="adapter", payload={"action": action.value, "status": receipt.status, "idempotency_key": idempotency_key})
         return receipt

@@ -57,3 +57,9 @@ class AbyssWorkflow:
         self.stage = self._next_stage[self.stage]
         return self.stage
 
+    def continue_current_coverage(self) -> WorkflowStage:
+        """Skip enrollment and transition when the user keeps current coverage."""
+        if self.stage != WorkflowStage.RECOMMEND:
+            raise RuntimeError("current coverage can only be selected from recommendation")
+        self.stage = WorkflowStage.VERIFY
+        return self.stage

@@ -115,6 +115,10 @@ class JourneyActionIn(BaseModel):
     first_premium_confirmed: bool = False
 
 
+class JourneySelectionIn(BaseModel):
+    hospital_id: int = Field(gt=0)
+
+
 def _journey_payload(journey: CareJourney) -> dict:
     return {
         "journey_id": journey.journey_id,
@@ -133,6 +137,15 @@ def _journey_payload(journey: CareJourney) -> dict:
              "hard_failures": list(item.hard_failures)} for item in journey.evaluations
         ],
         "hospital_rates": [item.as_dict() for item in journey.hospital_rates],
+        "current_plan": journey.catalogs.plan(journey.current_plan_id).plan_id,
+        "current_plan_name": journey.catalogs.plan(journey.current_plan_id).name,
+        "current_plan_options": [item.as_dict() for item in journey.current_plan_options],
+        "alternative_plan": (
+            journey.alternative_plan.as_dict() if journey.alternative_plan else None
+        ),
+        "selected_care_path": (
+            journey.selected_care_path.as_dict() if journey.selected_care_path else None
+        ),
         "receipts": [
             {"action": receipt.action, "status": receipt.status, "sandbox": receipt.sandbox,
              "scope": receipt.consent_scope, "idempotency_key": receipt.idempotency_key,
@@ -218,6 +231,22 @@ def advance_journey(journey_id: str, user_id: int = Depends(require_user)):
     try:
         journey.advance()
     except (RuntimeError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_payload(journey)
+
+
+@app.post("/api/journeys/{journey_id}/selection")
+def select_journey_path(
+    journey_id: str,
+    body: JourneySelectionIn,
+    user_id: int = Depends(require_user),
+):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        journey.select_current_care_path(body.hospital_id)
+    except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _journey_payload(journey)
 
