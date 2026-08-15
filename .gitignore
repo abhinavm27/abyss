@@ -1,0 +1,22 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+tmp/
+
+# Never commit credentials, exported patient documents, or runtime state.
+secrets/
+data/private/
+data/uploads/
+*.pem
+*.key
+
