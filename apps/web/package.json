@@ -7,6 +7,7 @@
     "dev": "vite",
     "demo": "vite --mode demo",
     "build": "vite build",
+    "build:sites": "vite build && node scripts/prepare-sites.mjs",
     "build:ios": "vite build --mode ios",
     "preview": "vite preview",
     "typecheck": "tsc -b --force",
