@@ -9,6 +9,10 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+apps/web/node_modules/
+apps/web/dist/
+services/api/.venv/
+services/api/*.db
 *.egg-info/
 .DS_Store
 tmp/
@@ -19,4 +23,3 @@ data/private/
 data/uploads/
 *.pem
 *.key
-

@@ -55,6 +55,22 @@ documents, or private SSH keys.
    PYTHONPATH=src python3 -m unittest discover -s tests -v
    ```
 
+7. Run the migrated application locally (while the Hermes tunnel is open):
+
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/pip install -e . -e 'services/api[dev]'
+   PYTHONPATH=src:services/api .venv/bin/uvicorn app.api:app --port 8010
+   ```
+
+   In another terminal:
+
+   ```bash
+   cd apps/web
+   npm ci
+   npm run dev
+   ```
+
 ## Repository map
 
 ```text
@@ -62,11 +78,19 @@ AGENTS.md                  Codex operating contract
 CLAUDE.md                  Claude Code operating contract
 docs/                      Product, architecture, security, and demo truth
 src/abyss/hermes_client.py Authenticated client for the NemoClaw gateway
+src/abyss/cost_engine.py   Deterministic annual care-path comparison
 src/abyss/domain.py        Shared fact, consent, and care-state contracts
 src/abyss/workflow.py      Permissioned golden-path state machine
+apps/web/                  ABYSS React/Vite user application
+services/api/              FastAPI, ingestion, pricing, and Hermes adapter
+scenarios/wa_mri/          Synthetic three-plan, three-provider demo fixture
 scripts/tunnel-hermes.sh   Private GN100 dashboard/API forwarding
 tests/                     Deterministic unit tests; no live PHI or credentials
 ```
+
+The imported audio and document-extraction adapters remain optional compatibility
+paths for now. Typed questions use Hermes on the GN100; deterministic ABYSS code
+produces the authoritative cost result and Hermes explains that evidence.
 
 ## Current infrastructure
 

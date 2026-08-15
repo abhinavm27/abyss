@@ -1,0 +1,450 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Noto+Sans+Devanagari:wght@400;500;600;700&family=Noto+Sans+Kannada:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 38 54% 96%;
+    --foreground: 151 28% 22%;
+
+    --card: 41 52% 98%;
+    --card-foreground: 151 28% 22%;
+
+    --popover: 38 100% 98%;
+    --popover-foreground: 192 42% 16%;
+
+    /* Darkened from 49% for WCAG AA. At 49% this measured 3.15:1 against the
+       cream panel (#f4eddf) as small text — "Small steps, supported",
+       "Invite-only beta", "Create one" — where AA wants 4.5. Now 4.80. The hue
+       and saturation are unchanged, so the sage reads the same; it is simply
+       darker. White on the primary button improves too, 3.65 -> 5.60. */
+    --primary: 123 14% 38%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 92 22% 91%;
+    --secondary-foreground: 151 28% 22%;
+
+    --muted: 39 25% 91%;
+    /* Darkened from 42% for WCAG AA. Body copy, the brand tagline and the
+       "not a monitored emergency service" disclaimer all measured 4.23:1
+       against the cream panel, just under the 4.5 AA wants for small text.
+       Now 4.81. */
+    --muted-foreground: 143 9% 39%;
+
+    --accent: 36 77% 57%;
+    --accent-foreground: 151 28% 22%;
+
+    --destructive: 0 46% 49%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 123 21% 43%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 35 70% 47%;
+    --warning-foreground: 38 100% 98%;
+
+    --info: 123 14% 49%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 93 17% 84%;
+    --border-dark: 151 28% 22%;
+    --input: 93 17% 78%;
+    --ring: 123 14% 49%;
+
+    --radius: 1.25rem;
+    --radius-sm: 0.9rem;
+    --radius-lg: 1.75rem;
+
+    --sidebar-background: 40 46% 94%;
+    --sidebar-foreground: 151 28% 22%;
+    --sidebar-primary: 123 14% 49%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 91 25% 88%;
+    --sidebar-accent-foreground: 151 28% 22%;
+    --sidebar-border: 93 17% 84%;
+    --sidebar-ring: 123 14% 49%;
+
+    --font-display: 'Source Serif 4', Georgia, serif;
+    --font-body: 'DM Sans', 'Noto Sans Devanagari', 'Noto Sans Kannada', system-ui, sans-serif;
+    --font-mono: 'DM Sans', 'Noto Sans Devanagari', 'Noto Sans Kannada', system-ui, sans-serif;
+  }
+
+  /* ── Clinic (CureVoz B2B) theme scope ────────────────────────────────── */
+  .theme-clinic {
+    --background: 210 40% 96%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 170 56% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 215 20% 35%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 170 56% 40%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 72% 29%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 95% 44%;
+    --warning-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 170 56% 40%;
+    --radius: 0.5rem;
+    --sidebar-background: 207 46% 19%;
+    --sidebar-foreground: 213 27% 88%;
+    --sidebar-primary: 170 56% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 207 46% 24%;
+    --sidebar-accent-foreground: 213 27% 94%;
+    --sidebar-border: 207 46% 24%;
+    --sidebar-ring: 170 56% 40%;
+    --font-display: 'DM Sans', system-ui, sans-serif;
+    --font-body: 'DM Sans', system-ui, sans-serif;
+    font-family: 'DM Sans', system-ui, sans-serif;
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 190 63% 7%;
+    --foreground: 38 43% 96%;
+    --card: 187 50% 13%;
+    --card-foreground: 38 43% 96%;
+    --popover: 187 50% 13%;
+    --popover-foreground: 38 43% 96%;
+    --primary: 171 63% 61%;
+    --primary-foreground: 190 63% 7%;
+    --secondary: 183 36% 18%;
+    --secondary-foreground: 38 43% 96%;
+    --muted: 185 29% 17%;
+    --muted-foreground: 168 14% 70%;
+    --accent: 47 100% 54%;
+    --accent-foreground: 190 63% 7%;
+    --destructive: 0 58% 61%;
+    --destructive-foreground: 190 63% 7%;
+    --success: 161 43% 58%;
+    --success-foreground: 190 63% 7%;
+    --warning: 36 74% 62%;
+    --warning-foreground: 190 63% 7%;
+    --info: 171 63% 61%;
+    --info-foreground: 190 63% 7%;
+    --border: 183 27% 25%;
+    --border-dark: 38 43% 96%;
+    --input: 183 27% 31%;
+    --ring: 171 63% 61%;
+    --sidebar-background: 190 63% 7%;
+    --sidebar-foreground: 38 43% 96%;
+    --sidebar-primary: 171 63% 61%;
+    --sidebar-primary-foreground: 190 63% 7%;
+    --sidebar-accent: 183 36% 18%;
+    --sidebar-accent-foreground: 38 43% 96%;
+    --sidebar-border: 183 27% 25%;
+    --sidebar-ring: 171 63% 61%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    min-width: 20rem;
+    background: hsl(var(--background));
+    font-size: 100%;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100vh;
+    margin: 0;
+    background:
+      radial-gradient(circle at 8% 3%, hsl(36 80% 94% / 0.9), transparent 28rem),
+      radial-gradient(circle at 92% 15%, hsl(105 25% 91% / 0.72), transparent 25rem),
+      hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-body);
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.22;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.18'/%3E%3C/svg%3E");
+    mix-blend-mode: multiply;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  button,
+  input,
+  optgroup,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  [role='button'] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :focus-visible {
+    outline: 3px solid hsl(var(--ring));
+    outline-offset: 3px;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer components {
+  .heali-page {
+    min-height: 100%;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  .heali-surface {
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-lg);
+    background: hsl(var(--card));
+    box-shadow: 0 18px 55px hsl(151 28% 22% / 0.055);
+  }
+
+  .heali-paper {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid hsl(var(--border) / 0.8);
+    border-radius: 2rem;
+    background: hsl(var(--card) / 0.88);
+    box-shadow: 0 24px 70px hsl(151 28% 22% / 0.07);
+  }
+
+  .heali-paper::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.13;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)' opacity='.16'/%3E%3C/svg%3E");
+    mix-blend-mode: multiply;
+  }
+
+  .heali-heading {
+    font-family: var(--font-display);
+    font-size: clamp(1.875rem, 1.45rem + 1.5vw, 2.5rem);
+    font-weight: 500;
+    line-height: 1.02;
+    letter-spacing: -0.035em;
+  }
+
+  .heali-section-heading {
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    font-weight: 500;
+    line-height: 1.25;
+    letter-spacing: -0.018em;
+  }
+
+  .heali-eyebrow {
+    color: hsl(var(--muted-foreground));
+    font-family: var(--font-body);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.035em;
+  }
+
+  .heali-button-primary,
+  .heali-button-secondary {
+    display: inline-flex;
+    min-height: 3rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 999px;
+    padding: 0.6875rem 1rem;
+    font-family: var(--font-body);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    line-height: 1.2;
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease,
+      transform 160ms ease;
+  }
+
+  .heali-button-primary {
+    border: 1px solid hsl(var(--primary));
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+  }
+
+  .heali-button-primary:hover {
+    background: hsl(123 17% 42%);
+    border-color: hsl(123 17% 42%);
+  }
+
+  .heali-button-secondary {
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--card));
+    color: hsl(var(--foreground));
+  }
+
+  .heali-button-secondary:hover {
+    border-color: hsl(var(--primary) / 0.45);
+    background: hsl(var(--secondary));
+  }
+
+  .heali-button-primary:active,
+  .heali-button-secondary:active {
+    transform: translateY(1px);
+  }
+
+  .heali-button-primary:disabled,
+  .heali-button-secondary:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .heali-chip {
+    display: inline-flex;
+    min-height: 2.25rem;
+    align-items: center;
+    gap: 0.375rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 999px;
+    background: hsl(var(--card));
+    padding: 0.375rem 0.75rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+
+  .heali-notice {
+    border-inline-start: 4px solid hsl(var(--primary));
+    border-radius: var(--radius-sm);
+    background: hsl(var(--secondary));
+    padding: 0.875rem 1rem;
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer utilities {
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer utilities {
+  .border-hairline {
+    border-color: hsl(var(--border));
+  }
+  .rule-thick {
+    height: 4px;
+    background: hsl(var(--primary));
+    width: 100%;
+  }
+  .rule-accent {
+    height: 4px;
+    background: hsl(var(--accent));
+    width: 100%;
+  }
+  .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .invert-section {
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+  }
+  .accent-section {
+    background: hsl(var(--accent));
+    color: hsl(var(--accent-foreground));
+  }
+  .texture-lines {
+    position: relative;
+  }
+  .texture-lines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 1px,
+      hsl(var(--primary) / 0.03) 1px,
+      hsl(var(--primary) / 0.03) 2px
+    );
+    background-size: 100% 4px;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  .tabular-data {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .safe-area-bottom {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .safe-area-top {
+    padding-top: max(0px, env(safe-area-inset-top));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border: 185 11% 42%;
+    --input: 185 11% 42%;
+  }
+}
