@@ -243,6 +243,25 @@ class VerticalSliceTests(TestCase):
         self.assertIn("matching catalog entry", questions)
         self.assertNotIn("MRI knee", questions)
 
+    def test_complete_abdominal_ultrasound_resolves_from_explicit_reply(self) -> None:
+        class FakeModel:
+            def chat(self, messages, **kwargs):
+                # The extraction model may omit a modifier; terminology
+                # resolution must still inspect the user's explicit reply.
+                return '{"facts":[{"name":"requested_procedure","value":"Abdominal ultrasound","confidence":0.9}]}'
+
+        journey = CareJourney.open(
+            "journey-abdominal-ultrasound",
+            onboarding_agent=OnboardingAgent(FakeModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("Abdominal ultrasound, complete.", source="user_request")
+        self.assertEqual(journey.procedure_resolution.code, "76700")
+        self.assertEqual(
+            journey.workflow.care_state.facts["procedure_code"].value, "76700"
+        )
+        self.assertNotIn("procedure_code_confirmation", journey.onboarding_missing)
+
     def test_onboarding_accumulates_facts_and_routes_confirmation_through_knowledge(self) -> None:
         class SequencedModel:
             def __init__(self):

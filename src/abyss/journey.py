@@ -101,8 +101,12 @@ class CareJourney:
                 confirmed_code = "73721"
             elif "with contrast" in normalized:
                 confirmed_code = "73722"
+            proposed_procedure_in_reply = any(
+                fact.name == "requested_procedure" for fact in proposal.facts
+            )
+            procedure_phrase = text if proposed_procedure_in_reply else str(procedure)
             self.procedure_resolution = self.knowledge_agent.propose_procedure(
-                str(procedure), confirmed_code=confirmed_code
+                procedure_phrase, confirmed_code=confirmed_code
             )
             if not self.procedure_resolution.needs_confirmation:
                 self.record_fact(DecisionFact("procedure_code", self.procedure_resolution.code,

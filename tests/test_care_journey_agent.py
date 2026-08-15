@@ -67,6 +67,39 @@ class CareJourneyAgentTests(unittest.TestCase):
         self.assertIn("target_journey_id:empty_string_to_null", plan.normalizations)
         self.assertIn("reuse:empty_value_to_array", plan.normalizations)
 
+    def test_clarification_answer_can_continue_active_intake_journey(self) -> None:
+        context = dict(self.context)
+        context["journeys"] = [
+            {
+                "journey_id": "journey-ultrasound",
+                "stage": "intake",
+                "status": "active",
+                "pending_fields": ["procedure_code_confirmation"],
+                "pending_questions": [
+                    "What body area and specific type of procedure did your clinician order?"
+                ],
+                "intake_facts": {
+                    "requested_procedure": {
+                        "value": "ultrasound scan",
+                        "source": "care_journey_agent",
+                        "verification_status": "inferred",
+                    }
+                },
+            }
+        ]
+        model = FakePlanner(
+            '{"intent":"continue_journey",'
+            '"target_journey_id":"journey-ultrasound",'
+            '"target_appointment_id":null,"steps":["continue_active_stage"],'
+            '"reuse":[],"refresh":[],"missing":[]}'
+        )
+        plan = CareJourneyAgent(model).plan(
+            "Abdominal ultrasound, complete.", context=context,
+            active_journey_id="journey-ultrasound",
+        )
+        self.assertEqual(plan.intent, JourneyIntent.CONTINUE_JOURNEY)
+        self.assertEqual(plan.target_journey_id, "journey-ultrasound")
+
     def test_invalid_schema_is_retried_with_model_feedback(self) -> None:
         model = SequencedPlanner(
             '{"intent":"new_care_request","steps":"start"}',

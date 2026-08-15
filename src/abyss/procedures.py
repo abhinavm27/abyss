@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -20,6 +21,7 @@ class ProcedureCatalog:
     _records = {
         "73721": "MRI knee without contrast",
         "73722": "MRI knee with contrast",
+        "76700": "Complete abdominal ultrasound",
     }
 
     def names_for(self, codes: tuple[str, ...]) -> tuple[str, ...]:
@@ -27,9 +29,15 @@ class ProcedureCatalog:
         return tuple(self._records[code] for code in codes if code in self._records)
 
     def resolve(self, phrase: str, *, confirmed_code: str | None = None) -> ProcedureResolution:
-        normalized = " ".join(phrase.lower().replace("-", " ").split())
+        normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", phrase.lower()).split())
         if confirmed_code in self._records:
             return ProcedureResolution(confirmed_code, self._records[confirmed_code], "confirmed")
+        if normalized in {
+            "abdominal ultrasound complete", "complete abdominal ultrasound",
+            "ultrasound abdomen complete", "complete ultrasound abdomen",
+            "us exam abdomen complete", "us exam abdom complete",
+        }:
+            return ProcedureResolution("76700", self._records["76700"], "source_backed")
         if normalized in {"73721", "mri knee without contrast", "knee mri without contrast", "mri knee no contrast"}:
             return ProcedureResolution("73721", self._records["73721"], "source_backed")
         if normalized in {"73722", "mri knee with contrast", "knee mri with contrast"}:

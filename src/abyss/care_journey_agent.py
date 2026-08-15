@@ -77,7 +77,11 @@ never choose coverage, and never provide medical advice.
 Use JSON null when there is no target ID. steps, reuse, refresh, and missing
 must always be JSON arrays, including when they are empty. A request to book or
 arrange a different kind of care is new_care_request even when another journey
-is active."""
+is active. Resolve short replies against the active journey's pending_questions
+and intake_facts. If the message answers a pending question, use
+continue_journey and target that journey. Use journey_status only when the user
+is actually asking for status; words that are part of a procedure description,
+such as "complete" in "abdominal ultrasound, complete", are not status requests."""
 
 
 class CareJourneyAgent:

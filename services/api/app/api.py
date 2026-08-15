@@ -25,6 +25,7 @@ from abyss.hermes_client import HermesError
 from abyss.domain import ConsentAction, DecisionFact, VerificationStatus
 from abyss.journey import CareJourney
 from abyss.knowledge import SQLiteHospitalKnowledgeCatalog
+from abyss.procedures import ProcedureResolution
 from abyss.workflow import WorkflowStage
 
 from . import auth, db, retrieval
@@ -310,10 +311,26 @@ def _user_care_context(conn: sqlite3.Connection, user_id: int) -> dict:
     journeys = []
     for row in journey_rows:
         snapshot = json.loads(row["snapshot_json"])
+        intake_facts = {
+            item["name"]: {
+                "value": item.get("value"),
+                "source": item.get("source"),
+                "verification_status": item.get("verification_status"),
+            }
+            for item in snapshot.get("facts", [])
+            if item.get("name") in {
+                "requested_procedure", "procedure_code", "service_date",
+                "coverage_end_date", "contrast_status", "preferred_provider",
+                "preferred_facility",
+            }
+        }
         journeys.append({
             "journey_id": row["journey_id"], "title": row["title"],
             "stage": row["stage"], "status": row["status"],
             "selected_care_path": snapshot.get("selected_care_path"),
+            "pending_fields": snapshot.get("onboarding_missing", []),
+            "pending_questions": snapshot.get("onboarding_questions", []),
+            "intake_facts": intake_facts,
             "updated_at": row["updated_at"],
         })
     appointments = [dict(row) for row in conn.execute(
@@ -406,6 +423,48 @@ def _restore_completed_journey(
     return journey
 
 
+def _restore_intake_journey(
+    conn: sqlite3.Connection, journey_id: str | None, user_id: int
+) -> CareJourney | None:
+    """Restore a persisted user-owned intake journey after an API restart."""
+    if not journey_id:
+        return None
+    row = conn.execute(
+        """SELECT snapshot_json FROM care_journey
+           WHERE journey_id=? AND user_id=? AND stage='intake' AND status='active'""",
+        (journey_id, user_id),
+    ).fetchone()
+    if row is None:
+        return None
+    snapshot = json.loads(row["snapshot_json"])
+    journey = CareJourney.open(
+        journey_id, user_id=str(user_id), **_journey_dependencies()
+    )
+    for item in snapshot.get("facts", []):
+        consent = item.get("consent_requirement")
+        journey.record_fact(DecisionFact(
+            name=str(item["name"]), value=item.get("value"),
+            source=str(item["source"]),
+            observed_at=datetime.fromisoformat(item["observed_at"]),
+            confidence=float(item["confidence"]),
+            verification_status=VerificationStatus(item["verification_status"]),
+            consent_required=ConsentAction(consent) if consent else None,
+        ))
+    resolution = snapshot.get("procedure_resolution")
+    if resolution:
+        journey.procedure_resolution = ProcedureResolution(
+            code=resolution.get("code"),
+            canonical_name=resolution.get("canonical_name"),
+            confidence=str(resolution["confidence"]),
+            candidates=tuple(map(str, resolution.get("candidates", []))),
+            needs_confirmation=bool(resolution.get("needs_confirmation")),
+        )
+    journey.onboarding_missing = tuple(map(str, snapshot.get("onboarding_missing", [])))
+    journey.onboarding_questions = tuple(map(str, snapshot.get("onboarding_questions", [])))
+    _journeys[journey_id] = journey
+    return journey
+
+
 def _open_journey(user_id: int, *, seed_defaults: bool = True) -> CareJourney:
     journey_id = f"journey-{uuid.uuid4().hex[:12]}"
     journey = CareJourney.open(journey_id, user_id=str(user_id), **_journey_dependencies())
@@ -476,6 +535,10 @@ def care_agent_message(
                      if journey.onboarding_questions
                      else "I opened a new care journey and recorded the intake facts.")
         elif plan.intent == JourneyIntent.CONTINUE_JOURNEY:
+            if journey is None:
+                journey = _restore_intake_journey(
+                    conn, plan.target_journey_id, user_id
+                )
             if journey is None:
                 raise RuntimeError("the selected journey is not active on this server")
             if journey.stage.value == "intake":
