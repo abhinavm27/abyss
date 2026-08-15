@@ -22,6 +22,7 @@ class ProcedureCatalog:
         "73721": "MRI knee without contrast",
         "73722": "MRI knee with contrast",
         "76700": "Complete abdominal ultrasound",
+        "85025": "Complete blood count with differential",
     }
 
     def names_for(self, codes: tuple[str, ...]) -> tuple[str, ...]:
@@ -43,6 +44,16 @@ class ProcedureCatalog:
             and bool({"abdomen", "abdominal"} & tokens)
         ):
             return ProcedureResolution("76700", self._records["76700"], "source_backed")
+        if normalized in {
+            "cbc with differential", "cbc with diff",
+            "complete blood count with differential",
+            "complete blood count with diff",
+            "complete cbc with auto diff wbc",
+        } or (
+            ("cbc" in tokens or {"complete", "blood", "count"} <= tokens)
+            and bool({"differential", "diff"} & tokens)
+        ):
+            return ProcedureResolution("85025", self._records["85025"], "source_backed")
         if normalized in {"73721", "mri knee without contrast", "knee mri without contrast", "mri knee no contrast"}:
             return ProcedureResolution("73721", self._records["73721"], "source_backed")
         if normalized in {"73722", "mri knee with contrast", "knee mri with contrast"}:

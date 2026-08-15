@@ -77,3 +77,9 @@ class AgentRoleTests(TestCase):
         result = ProcedureCatalog().resolve("I want an MRI scan for my knee")
         self.assertTrue(result.needs_confirmation)
         self.assertEqual(result.candidates, ("73721", "73722"))
+
+    def test_procedure_catalog_resolves_cbc_with_differential(self):
+        result = ProcedureCatalog().resolve("Complete blood count (CBC) with differential")
+        self.assertEqual(result.code, "85025")
+        self.assertEqual(result.canonical_name, "Complete blood count with differential")
+        self.assertFalse(result.needs_confirmation)
