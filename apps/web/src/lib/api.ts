@@ -324,6 +324,55 @@ export interface CareJourneySnapshot {
     selected_at: string;
     booking_consent: boolean;
   } | null;
+  booking_preferences: {
+    date_from: string;
+    date_to: string;
+    time_of_day: "morning" | "afternoon" | "any";
+    source: string;
+    confidence: number;
+  } | null;
+  booking_slots: {
+    slot_id: string;
+    hospital_id: number;
+    hospital: string;
+    procedure_code: string;
+    starts_at: string;
+    duration_minutes: number;
+    status: string;
+    source: string;
+    retry_demo: boolean;
+    consent_scope: string;
+  }[];
+  selected_booking_slot: {
+    slot_id: string;
+    hospital_id: number;
+    hospital: string;
+    procedure_code: string;
+    starts_at: string;
+    duration_minutes: number;
+    status: string;
+    source: string;
+    retry_demo: boolean;
+    consent_scope: string;
+  } | null;
+  booking_consent_scope: string | null;
+  booking_tasks: {
+    task_id: string;
+    slot_id: string;
+    status: "scheduled" | "completed" | "needs_user_action";
+    attempts: number;
+    next_attempt_at: string;
+    last_error: string;
+    created_at: string;
+    completed_at: string | null;
+  }[];
+  notifications: {
+    notification_id: string;
+    kind: string;
+    message: string;
+    created_at: string;
+    read: boolean;
+  }[];
   receipts: {
     action: string;
     status: string;
@@ -543,6 +592,17 @@ export const api = {
     req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/selection`, {
       method: "POST",
       body: JSON.stringify({ hospital_id: hospitalId }),
+    }),
+
+  journeyBookingPreferences: (journeyId: string, text: string) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/booking/preferences`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+
+  journeySelectBookingSlot: (journeyId: string, slotId: string) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/booking/slots/${encodeURIComponent(slotId)}/select`, {
+      method: "POST",
     }),
 
   journeyMatchingReason: (journeyId: string, question?: string) =>

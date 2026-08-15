@@ -10,6 +10,9 @@ const money = (value) => Number(value).toLocaleString("en-US", { style: "currenc
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (char) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
 })[char]);
+const localDateTime = (value) => new Date(value).toLocaleString("en-US", {
+  weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+});
 
 function addMessage(text, role = "assistant") {
   const node = document.createElement("div");
@@ -96,14 +99,29 @@ function render() {
       addMessage(`Sandbox verification completed for ${selected.hospital}. Booking still requires separate consent.`);
     }));
   } else if (journey.stage === "book") {
-    controls.append(button("Approve sandbox appointment booking", async () => {
-      const selected = journey.selected_care_path;
-      if (!selected) throw new Error("A selected care path is required before booking.");
-      const scope = `${selected.hospital} / September 4, 2026 at 10:30`;
-      await request(`/api/journeys/${journey.journey_id}/consents`, { method: "POST", body: JSON.stringify({ action: "book_appointment", scope, approved: true }) });
-      journey = await request(`/api/journeys/${journey.journey_id}/actions`, { method: "POST", body: JSON.stringify({ action: "book_appointment", scope, idempotency_key: `ui-book-${journey.journey_id}` }) });
-      addMessage("Sandbox appointment booked. The care journey is complete.");
-    }));
+    if (!journey.booking_slots?.length) {
+      const prompt = document.createElement("p");
+      prompt.textContent = "Tell the Booking Agent your date range and whether you prefer mornings or afternoons.";
+      controls.append(prompt);
+    } else if (!journey.selected_booking_slot) {
+      const prompt = document.createElement("p");
+      prompt.textContent = "Choose one of the Booking Agent's available slots below.";
+      controls.append(prompt);
+    } else {
+      controls.append(button("Approve exact sandbox booking", async () => {
+        const scope = journey.booking_consent_scope;
+        if (!scope) throw new Error("The exact booking scope is unavailable.");
+        await request(`/api/journeys/${journey.journey_id}/consents`, { method: "POST", body: JSON.stringify({ action: "book_appointment", scope, approved: true }) });
+        journey = await request(`/api/journeys/${journey.journey_id}/actions`, { method: "POST", body: JSON.stringify({ action: "book_appointment", scope, idempotency_key: `ui-book-${journey.journey_id}-${journey.selected_booking_slot.slot_id}` }) });
+        const scheduled = journey.booking_tasks?.some((task) => task.status === "scheduled");
+        if (scheduled) {
+          addMessage("The provider did not confirm immediately. I scheduled a retry for this exact approved slot and will update you here when it finishes.");
+          void pollBookingTask();
+        } else {
+          addMessage("Sandbox appointment booked. The care journey is complete.");
+        }
+      }));
+    }
   } else {
     controls.textContent = "Journey complete. All material actions have receipts.";
   }
@@ -134,6 +152,30 @@ function render() {
   } else {
     alternativeCoverage.textContent = "No alternative scenario yet.";
   }
+
+  const booking = el("booking");
+  if (!journey?.selected_care_path || !["book", "complete"].includes(journey.stage)) {
+    booking.textContent = "Select and verify a care path first.";
+  } else if (journey.selected_booking_slot) {
+    const slot = journey.selected_booking_slot;
+    booking.innerHTML = `<div class="selected"><span class="eyebrow">Selected appointment</span><b>${localDateTime(slot.starts_at)}</b><small>${escapeHtml(slot.hospital)} · ${slot.duration_minutes} minutes · ${escapeHtml(slot.procedure_code)}</small></div>`;
+  } else if (journey.booking_slots?.length) {
+    booking.innerHTML = `<p class="notice">These are synthetic slots. Choosing one does not book it.</p><ul>${journey.booking_slots.map((slot) => `<li class="path-card"><span class="eyebrow">${slot.retry_demo ? "Retry demonstration slot" : "Available"}</span><b>${localDateTime(slot.starts_at)}</b><small>${escapeHtml(slot.hospital)} · ${slot.duration_minutes} minutes${slot.retry_demo ? " · first confirmation attempt will be delayed" : ""}</small><button type="button" data-slot-id="${escapeHtml(slot.slot_id)}">Choose this slot</button></li>`).join("")}</ul>`;
+    booking.querySelectorAll("button[data-slot-id]").forEach((node) => {
+      node.onclick = () => run(async () => {
+        journey = await request(`/api/journeys/${journey.journey_id}/booking/slots/${encodeURIComponent(node.dataset.slotId)}/select`, { method: "POST" });
+        addMessage(`You selected ${localDateTime(journey.selected_booking_slot.starts_at)}. Review and approve the exact booking in Journey controls.`);
+      });
+    });
+  } else {
+    booking.innerHTML = `<p>The Booking Agent is ready. Try: <b>“2026-08-30 to 2026-09-15, any time.”</b></p>`;
+  }
+  if (journey?.booking_tasks?.length) {
+    booking.insertAdjacentHTML("beforeend", journey.booking_tasks.map((task) => `<div class="task ${task.status === "completed" ? "completed" : ""}"><b>Booking task: ${escapeHtml(task.status)}</b><small>Attempts: ${task.attempts}${task.status === "scheduled" ? ` · next retry ${localDateTime(task.next_attempt_at)}` : ""}</small></div>`).join(""));
+  }
+  if (journey?.notifications?.length) {
+    booking.insertAdjacentHTML("beforeend", journey.notifications.slice(-3).reverse().map((item) => `<div class="notification"><b>${escapeHtml(item.kind.replaceAll("_", " "))}</b><small>${escapeHtml(item.message)}</small></div>`).join(""));
+  }
   el("receipts").innerHTML = journey?.receipts?.length
     ? `<ul>${journey.receipts.map((x) => `<li>${x.action}: ${x.status}</li>`).join("")}</ul>`
     : "No sandbox receipts yet.";
@@ -149,6 +191,31 @@ async function run(work) {
   } catch (error) {
     status.className = "error";
     status.textContent = `Error: ${error.message}`;
+  }
+}
+
+async function pollBookingTask() {
+  for (let attempt = 0; attempt < 12 && journey?.stage === "book"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      journey = await request(`/api/journeys/${journey.journey_id}`);
+      render();
+      const task = journey.booking_tasks?.slice(-1)[0];
+      if (journey.stage === "complete") {
+        addMessage(journey.notifications?.slice(-1)[0]?.message || "The scheduled booking task completed.");
+        status.textContent = "Booking confirmed";
+        return;
+      }
+      if (task?.status === "needs_user_action") {
+        addMessage(journey.notifications?.slice(-1)[0]?.message || "The booking task needs your attention.");
+        status.textContent = "Booking needs attention";
+        return;
+      }
+    } catch (error) {
+      status.className = "error";
+      status.textContent = `Booking status check failed: ${error.message}`;
+      return;
+    }
   }
 }
 
@@ -174,6 +241,9 @@ el("composer").onsubmit = (event) => {
     } else if (journey.stage === "intake") {
       journey = await request(`/api/journeys/${journey.journey_id}/onboard`, { method: "POST", body: JSON.stringify({ text, source: "user_request" }) });
       addMessage(journey.onboarding_questions?.length ? journey.onboarding_questions.join(" ") : "The intake facts were recorded.");
+    } else if (journey.stage === "book") {
+      journey = await request(`/api/journeys/${journey.journey_id}/booking/preferences`, { method: "POST", body: JSON.stringify({ text }) });
+      addMessage(journey.booking_slots.length ? `The Booking Agent found ${journey.booking_slots.length} matching synthetic slots. Choose one under Booking Agent.` : "No matching slots were found. Try a wider date range or any time of day.");
     } else {
       addMessage("Use the journey controls to run the next permissioned step.");
     }

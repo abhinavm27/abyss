@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 
 from .adapters import ActionReceipt, SandboxAdapters
 from .agents import KnowledgeAgent, MatchingAgent, OnboardingAgent
+from .booking import (
+    BookingAgent,
+    BookingPreferences,
+    BookingSlot,
+    SandboxBookingService,
+)
 from .catalogs import SeededCatalog
 from .care_paths import (
     AlternativePlanScenario,
@@ -49,6 +56,11 @@ class CareJourney:
     current_plan_options: list[HospitalCareOption] = field(default_factory=list)
     alternative_plan: AlternativePlanScenario | None = None
     selected_care_path: CarePathSelection | None = None
+    booking_agent: BookingAgent = field(default_factory=BookingAgent)
+    booking_service: SandboxBookingService = field(default_factory=SandboxBookingService)
+    booking_preferences: BookingPreferences | None = None
+    booking_slots: list[BookingSlot] = field(default_factory=list)
+    selected_booking_slot: BookingSlot | None = None
     memory: FactLedger = field(default_factory=FactLedger)
     audit: AuditLedger = field(default_factory=AuditLedger)
 
@@ -192,6 +204,107 @@ class CareJourney:
         )
         return self.selected_care_path
 
+    def collect_booking_preferences(self, text: str) -> list[BookingSlot]:
+        if self.stage != WorkflowStage.BOOK:
+            raise RuntimeError("booking preferences are only accepted in booking stage")
+        if not self.selected_care_path:
+            raise RuntimeError("select a care path before searching appointment slots")
+        if self.selected_care_path.network_status != "sandbox_verified":
+            raise RuntimeError("network and provider verification is required before slot search")
+        service_date = self.workflow.care_state.facts.get("service_date")
+        default_date = str(service_date.value) if service_date else "2026-08-30"
+        try:
+            datetime.fromisoformat(default_date)
+        except ValueError:
+            default_date = "2026-08-30"
+        self.booking_preferences = self.booking_agent.collect_preferences(
+            text,
+            default_date=default_date,
+        )
+        self.selected_booking_slot = None
+        self.booking_slots = self.booking_service.search_slots(
+            hospital_id=self.selected_care_path.hospital_id,
+            hospital=self.selected_care_path.hospital,
+            procedure_code=self.selected_care_path.procedure_code,
+            preferences=self.booking_preferences,
+        )
+        self.audit.append(
+            self.journey_id,
+            "booking_slots_retrieved",
+            actor="booking_agent",
+            payload={
+                "slot_count": len(self.booking_slots),
+                "hospital_id": self.selected_care_path.hospital_id,
+                "procedure_code": self.selected_care_path.procedure_code,
+            },
+        )
+        return self.booking_slots
+
+    def select_booking_slot(self, slot_id: str) -> BookingSlot:
+        if self.stage != WorkflowStage.BOOK:
+            raise RuntimeError("appointment slots can only be selected in booking stage")
+        slot = next((item for item in self.booking_slots if item.slot_id == slot_id), None)
+        if slot is None or slot.status != "available":
+            raise RuntimeError("appointment slot is not available for this journey")
+        if not self.selected_care_path:
+            raise RuntimeError("select a care path before choosing an appointment slot")
+        if (
+            slot.hospital_id != self.selected_care_path.hospital_id
+            or slot.procedure_code != self.selected_care_path.procedure_code
+        ):
+            raise RuntimeError("appointment slot does not match the selected care path")
+        self.selected_booking_slot = slot
+        self.audit.append(
+            self.journey_id,
+            "booking_slot_selected",
+            actor="user",
+            payload={"slot_id": slot.slot_id, "starts_at": slot.starts_at},
+        )
+        return slot
+
+    @property
+    def booking_consent_scope(self) -> str | None:
+        if not self.selected_booking_slot or not self.selected_care_path:
+            return None
+        return self.selected_booking_slot.consent_scope(self.selected_care_path.plan_name)
+
+    def process_booking_tasks(self) -> None:
+        completed = self.booking_service.process_due_tasks()
+        for task in completed:
+            if task.journey_id != self.journey_id:
+                continue
+            self.audit.append(
+                self.journey_id,
+                "booking_retry_completed" if task.status == "completed" else "booking_retry_blocked",
+                actor="booking_task_worker",
+                payload={
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "attempts": task.attempts,
+                },
+            )
+            if task.status != "completed":
+                continue
+            replacement = ActionReceipt(
+                ConsentAction.BOOK_APPOINTMENT.value,
+                "sandbox_confirmed",
+                self.journey_id,
+                task.consent_scope,
+                task.idempotency_key,
+                datetime.now(UTC),
+            )
+            self.receipts = [
+                replacement if item.idempotency_key == task.idempotency_key else item
+                for item in self.receipts
+            ]
+            if self.selected_care_path:
+                self.selected_care_path = replace(
+                    self.selected_care_path,
+                    booking_consent=True,
+                )
+            if self.stage == WorkflowStage.BOOK:
+                self.workflow.advance()
+
     def explain_matching(self, question: str = "Why did these care paths pass or fail?") -> str:
         """Optional model explanation; never required for deterministic comparison."""
         if not self.evaluations:
@@ -237,7 +350,38 @@ class CareJourney:
             missing = sorted(required - self.workflow.care_state.facts.keys())
             if missing:
                 raise RuntimeError(f"coverage transition prerequisites missing: {', '.join(missing)}")
-        receipt = self.adapters.execute(action.value, self.journey_id, scope, idempotency_key)
+        if action == ConsentAction.BOOK_APPOINTMENT and self.selected_booking_slot:
+            expected_scope = self.booking_consent_scope
+            if expected_scope is None:
+                raise RuntimeError("booking consent scope is unavailable")
+            attempt = self.booking_service.request_booking(
+                journey_id=self.journey_id,
+                slot_id=self.selected_booking_slot.slot_id,
+                expected_scope=expected_scope,
+                consent_scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            receipt = ActionReceipt(
+                action.value,
+                "scheduled_retry" if attempt.status == "scheduled_retry" else "sandbox_confirmed",
+                self.journey_id,
+                scope,
+                idempotency_key,
+                datetime.now(UTC),
+            )
+            if attempt.task:
+                self.audit.append(
+                    self.journey_id,
+                    "booking_retry_scheduled",
+                    actor="booking_agent",
+                    payload={
+                        "task_id": attempt.task.task_id,
+                        "slot_id": attempt.task.slot_id,
+                        "next_attempt_at": attempt.task.next_attempt_at,
+                    },
+                )
+        else:
+            receipt = self.adapters.execute(action.value, self.journey_id, scope, idempotency_key)
         if not any(item.idempotency_key == idempotency_key for item in self.receipts):
             self.receipts.append(receipt)
         if self.selected_care_path and action == ConsentAction.SHARE_WITH_PROVIDER:

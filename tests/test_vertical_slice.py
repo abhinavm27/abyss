@@ -3,6 +3,7 @@ from unittest import TestCase
 from abyss.domain import ConsentAction
 from abyss.journey import CareJourney
 from abyss.knowledge import PublishedHospitalRate
+from abyss.booking import BookingAgent, SandboxBookingService
 from abyss.agents import KnowledgeAgent, OnboardingAgent
 from abyss.domain import DecisionFact, VerificationStatus
 from datetime import UTC, datetime
@@ -83,6 +84,65 @@ class VerticalSliceTests(TestCase):
         )
         journey.execute(ConsentAction.SHARE_WITH_PROVIDER, scope, "verify-current-path")
         self.assertEqual(journey.selected_care_path.network_status, "sandbox_verified")
+
+    def test_booking_agent_retry_completes_without_changing_approved_slot(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "MRI knee", code, "HCPCS",
+                    1, 500, 500, 500, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        class FakePreferenceModel:
+            def chat(self, messages, **kwargs):
+                return '{"date_from":"2026-08-30","date_to":"2026-09-15","time_of_day":"any"}'
+
+        journey = CareJourney.open(
+            "journey-booking-retry",
+            hospital_knowledge=FakeHospitalKnowledge(),
+            booking_agent=BookingAgent(FakePreferenceModel()),
+            booking_service=SandboxBookingService(retry_delay_seconds=0),
+        )
+        journey.record_fact(DecisionFact(
+            "procedure_code", "73721", "procedure_catalog", datetime.now(UTC),
+            1.0, VerificationStatus.VERIFIED,
+        ))
+        journey.record_consent(
+            ConsentAction.PROCESS_DOCUMENTS, approved=True, scope="seeded documents"
+        )
+        journey.advance()
+        journey.compare(["continuation", "wa-plan-b"])
+        journey.advance()
+        journey.select_current_care_path(10)
+        verify_scope = "Dr. Lee / Hospital A / Continuation PPO"
+        journey.record_consent(
+            ConsentAction.SHARE_WITH_PROVIDER, approved=True, scope=verify_scope
+        )
+        journey.execute(
+            ConsentAction.SHARE_WITH_PROVIDER, verify_scope, "verify-booking-retry"
+        )
+        journey.advance()
+        slots = journey.collect_booking_preferences("Any time in the next two weeks")
+        journey.select_booking_slot(slots[0].slot_id)
+        booking_scope = journey.booking_consent_scope
+        journey.record_consent(
+            ConsentAction.BOOK_APPOINTMENT, approved=True, scope=booking_scope
+        )
+        receipt = journey.execute(
+            ConsentAction.BOOK_APPOINTMENT,
+            booking_scope,
+            "book-retry",
+        )
+        self.assertEqual(receipt.status, "scheduled_retry")
+
+        journey.process_booking_tasks()
+        self.assertEqual(journey.stage, WorkflowStage.COMPLETE)
+        self.assertEqual(journey.receipts[-1].status, "sandbox_confirmed")
+        self.assertEqual(journey.selected_booking_slot.slot_id, slots[0].slot_id)
 
     def test_onboarding_agent_is_orchestrated_into_fact_ledger(self) -> None:
         class FakeModel:

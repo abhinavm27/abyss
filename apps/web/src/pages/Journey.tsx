@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type CareJourneySnapshot } from "@/lib/api";
 
 const money = (value: number) => value.toLocaleString("en-US", {
@@ -11,6 +11,15 @@ export function Journey({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [matchingReason, setMatchingReason] = useState<string | null>(null);
+  const [bookingText, setBookingText] = useState("2026-08-30 to 2026-09-15, any time");
+
+  useEffect(() => {
+    if (!snapshot?.booking_tasks.some((task) => task.status === "scheduled")) return;
+    const timer = window.setInterval(() => {
+      void api.journey(snapshot.journey_id).then(setSnapshot).catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [snapshot]);
 
   async function run(work: () => Promise<CareJourneySnapshot>) {
     setBusy(true);
@@ -75,8 +84,10 @@ export function Journey({ onBack }: { onBack: () => void }) {
   }
 
   async function book() {
-    if (!snapshot?.selected_care_path) throw new Error("Choose a hospital first.");
-    const scope = `${snapshot.selected_care_path.hospital} / September 4, 2026 at 10:30`;
+    if (!snapshot?.selected_booking_slot || !snapshot.booking_consent_scope) {
+      throw new Error("Choose an appointment slot first.");
+    }
+    const scope = snapshot.booking_consent_scope;
     await api.journeyConsent(snapshot.journey_id, {
       action: "book_appointment",
       scope,
@@ -85,8 +96,18 @@ export function Journey({ onBack }: { onBack: () => void }) {
     return api.journeyAction(snapshot.journey_id, {
       action: "book_appointment",
       scope,
-      idempotency_key: `book-${snapshot.journey_id}`,
+      idempotency_key: `book-${snapshot.journey_id}-${snapshot.selected_booking_slot.slot_id}`,
     });
+  }
+
+  async function findBookingSlots() {
+    if (!snapshot) throw new Error("Start a journey first.");
+    return api.journeyBookingPreferences(snapshot.journey_id, bookingText);
+  }
+
+  async function selectBookingSlot(slotId: string) {
+    if (!snapshot) throw new Error("Start a journey first.");
+    return api.journeySelectBookingSlot(snapshot.journey_id, slotId);
   }
 
   return (
@@ -162,7 +183,35 @@ export function Journey({ onBack }: { onBack: () => void }) {
           {matchingReason && <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm leading-relaxed"><span className="mb-1 block text-xs font-medium uppercase tracking-wider text-primary">Matching Agent reasoning</span>{matchingReason}</div>}
 
           {snapshot.stage === "verify" && <button disabled={busy} onClick={() => void run(verify)} className="mt-5 w-full rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground">Approve sandbox network and provider verification</button>}
-          {snapshot.stage === "book" && <button disabled={busy} onClick={() => void run(book)} className="mt-5 w-full rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground">Approve sandbox appointment booking</button>}
+          {snapshot.stage === "book" && (
+            <section className="mt-6 rounded-2xl border border-border bg-card p-5">
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-primary">Booking Agent</p>
+              <h2 className="mt-1 font-display text-xl font-semibold">Find a synthetic appointment</h2>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">The agent extracts your date and time preferences. Deterministic code searches slots and enforces consent for the exact appointment.</p>
+              <div className="mt-4 flex gap-2">
+                <input value={bookingText} onChange={(event) => setBookingText(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm" aria-label="Booking preferences" />
+                <button disabled={busy} onClick={() => void run(findBookingSlots)} className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Find slots</button>
+              </div>
+              {snapshot.booking_slots.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {snapshot.booking_slots.map((slot) => (
+                    <button key={slot.slot_id} disabled={busy || slot.status !== "available"} onClick={() => void run(() => selectBookingSlot(slot.slot_id))} className={`w-full rounded-xl border p-3 text-left text-sm ${snapshot.selected_booking_slot?.slot_id === slot.slot_id ? "border-primary bg-primary/5" : "border-border"}`}>
+                      <b>{new Date(slot.starts_at).toLocaleString()}</b>
+                      <span className="mt-1 block text-xs text-muted-foreground">{slot.hospital} · {slot.duration_minutes} minutes{slot.retry_demo ? " · retry demonstration" : ""}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {snapshot.selected_booking_slot && snapshot.booking_consent_scope && (
+                <div className="mt-4 rounded-xl border border-primary/30 bg-primary/5 p-4">
+                  <p className="text-xs leading-relaxed text-muted-foreground">Exact approval scope: {snapshot.booking_consent_scope}</p>
+                  <button disabled={busy || snapshot.booking_tasks.some((task) => task.status === "scheduled")} onClick={() => void run(book)} className="mt-3 w-full rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground">Approve this sandbox appointment</button>
+                </div>
+              )}
+              {snapshot.booking_tasks.map((task) => <p key={task.task_id} className="mt-3 rounded-xl bg-secondary p-3 text-xs">Booking task: <b>{task.status}</b> · {task.attempts} attempt(s){task.status === "scheduled" ? ". Refresh shortly to see the retry result." : ""}</p>)}
+              {snapshot.notifications.slice(-2).map((notification) => <p key={notification.notification_id} className="mt-2 text-xs leading-relaxed text-muted-foreground">{notification.message}</p>)}
+            </section>
+          )}
           {snapshot.stage === "complete" && <p className="mt-6 rounded-xl border border-primary/40 bg-primary/5 p-4 text-sm">Journey complete. The selection and permissioned actions are in the audit history.</p>}
         </>
       )}

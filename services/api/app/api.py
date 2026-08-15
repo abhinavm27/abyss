@@ -10,6 +10,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from threading import Event, Thread
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +33,28 @@ app = FastAPI(title="ABYSS", version="0.1.0")
 # application database; it must never silently turn a sandbox receipt into a
 # production action.
 _journeys: dict[str, CareJourney] = {}
+_booking_worker_stop = Event()
+
+
+def _booking_task_worker() -> None:
+    while not _booking_worker_stop.wait(1.0):
+        for journey in tuple(_journeys.values()):
+            try:
+                journey.process_booking_tasks()
+            except Exception:
+                # A single synthetic journey must not stop the task worker.
+                continue
+
+
+@app.on_event("startup")
+def start_booking_task_worker() -> None:
+    _booking_worker_stop.clear()
+    Thread(target=_booking_task_worker, name="booking-task-worker", daemon=True).start()
+
+
+@app.on_event("shutdown")
+def stop_booking_task_worker() -> None:
+    _booking_worker_stop.set()
 
 
 def _journey_dependencies() -> dict:
@@ -119,7 +142,13 @@ class JourneySelectionIn(BaseModel):
     hospital_id: int = Field(gt=0)
 
 
+class JourneyBookingPreferencesIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
 def _journey_payload(journey: CareJourney) -> dict:
+    journey.process_booking_tasks()
+    plan_name = journey.catalogs.plan(journey.current_plan_id).name
     return {
         "journey_id": journey.journey_id,
         "stage": journey.stage.value,
@@ -146,6 +175,23 @@ def _journey_payload(journey: CareJourney) -> dict:
         "selected_care_path": (
             journey.selected_care_path.as_dict() if journey.selected_care_path else None
         ),
+        "booking_preferences": (
+            journey.booking_preferences.as_dict() if journey.booking_preferences else None
+        ),
+        "booking_slots": [item.as_dict(plan_name) for item in journey.booking_slots],
+        "selected_booking_slot": (
+            journey.selected_booking_slot.as_dict(plan_name)
+            if journey.selected_booking_slot else None
+        ),
+        "booking_consent_scope": journey.booking_consent_scope,
+        "booking_tasks": [
+            item.as_dict()
+            for item in journey.booking_service.tasks_for_journey(journey.journey_id)
+        ],
+        "notifications": [
+            item.as_dict()
+            for item in journey.booking_service.notifications_for_journey(journey.journey_id)
+        ],
         "receipts": [
             {"action": receipt.action, "status": receipt.status, "sandbox": receipt.sandbox,
              "scope": receipt.consent_scope, "idempotency_key": receipt.idempotency_key,
@@ -251,6 +297,40 @@ def select_journey_path(
     return _journey_payload(journey)
 
 
+@app.post("/api/journeys/{journey_id}/booking/preferences")
+def collect_booking_preferences(
+    journey_id: str,
+    body: JourneyBookingPreferencesIn,
+    user_id: int = Depends(require_user),
+):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        journey.collect_booking_preferences(body.text)
+    except HermesError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_payload(journey)
+
+
+@app.post("/api/journeys/{journey_id}/booking/slots/{slot_id}/select")
+def select_booking_slot(
+    journey_id: str,
+    slot_id: str,
+    user_id: int = Depends(require_user),
+):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        journey.select_booking_slot(slot_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_payload(journey)
+
+
 class JourneyReasonIn(BaseModel):
     question: str = Field(default="Why did these care paths pass or fail?", min_length=1, max_length=500)
 
@@ -286,7 +366,8 @@ def action_journey(journey_id: str, body: JourneyActionIn, user_id: int = Depend
                                                   "sandbox-enrollment-receipt", datetime.now(timezone.utc), 1.0,
                                                   VerificationStatus.VERIFIED))
         receipt = journey.execute(body.action, body.scope, body.idempotency_key)
-        journey.advance()
+        if receipt.status != "scheduled_retry":
+            journey.advance()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _journey_payload(journey)
