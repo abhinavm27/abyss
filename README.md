@@ -29,7 +29,7 @@ Codex / Claude Code / ABYSS app
               |
               | https://inference.local
               v
-  vLLM + nvidia/Qwen3.6-35B-A3B-NVFP4 (GB10 GPU)
+  vLLM + NVIDIA Nemotron 3.5 Lightning 30B-A3B NVFP4 (GB10 GPU)
 ```
 
 NemoClaw is the trust boundary. Clients do not call vLLM on port 8000 directly,
@@ -99,7 +99,8 @@ produces the authoritative cost result and Hermes explains that evidence.
 - NemoClaw sandbox: `hermes`
 - Hermes dashboard remote port: `18791`
 - Hermes API remote port: `8642`
-- Local model: `nvidia/Qwen3.6-35B-A3B-NVFP4`
+- Local model: `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4`
+- Speculative decoder: `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark`
 
 These are defaults, not secrets. Each collaborator needs their own authorized
 Tailscale identity and SSH access.
