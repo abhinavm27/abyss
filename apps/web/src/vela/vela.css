@@ -15,7 +15,7 @@
 
 * { box-sizing: border-box; }
 
-html, body, #root { min-height: 100%; }
+html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 
 body {
   margin: 0;
@@ -41,7 +41,7 @@ button { color: inherit; }
   grid-template-columns: 248px minmax(0, 1fr);
   width: min(1500px, calc(100vw - 64px));
   height: min(850px, calc(100vh - 64px));
-  min-height: 660px;
+  min-height: min(660px, calc(100vh - 64px));
   margin: 32px auto;
   border: 1px solid rgba(21, 46, 77, .13);
   border-radius: 28px;
@@ -429,6 +429,31 @@ button { color: inherit; }
 
 .vela-preference-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }.vela-preference-grid article { padding: 18px; border: 1px solid rgba(28,53,84,.1); border-radius: 16px; background: rgba(255,255,255,.7); }.vela-pref-title { display: grid; grid-template-columns: 35px 1fr auto; align-items: center; gap: 10px; }.vela-pref-title > svg { width: 21px; color: #1d78bb; }.vela-pref-title h2 { margin: 0 0 3px; font-size: 11px; }.vela-pref-title p { margin: 0; color: #7a8799; font-size: 8px; }.vela-pref-title > b { color: #1472ba; font: 400 18px var(--vela-serif); }.vela-preference-grid input[type=range] { width: 100%; margin-top: 18px; accent-color: #1680ca; }.vela-pref-title > button { position: relative; width: 38px; height: 21px; border: 0; border-radius: 100px; background: #dce2e7; }.vela-pref-title > button i { position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.15);transition:.2s}.vela-pref-title > button.is-on{background:#24b596}.vela-pref-title > button.is-on i{left:20px}.vela-pref-title select{padding:7px;border:1px solid rgba(28,53,84,.12);border-radius:8px;color:#34506f;background:#fff;font-size:9px}.vela-pref-title.second{margin-top:15px;padding-top:15px;border-top:1px solid var(--vela-line)}.vela-preferences-saved{display:flex;align-items:center;justify-content:center;gap:6px;margin:18px 0;color:#1b9d82;font-size:9px}.vela-preferences-saved svg{width:12px}
 
+/* Chat is a fixed visual workspace, not a scrolling card. */
+.vela-stage.is-chat-mode .vela-network { bottom: -12%; height: 108%; opacity: 1; transition: opacity .7s ease; }
+.vela-stage.is-chat-mode .vela-network.is-hidden { opacity: 0; }
+.vela-stage.is-chat-mode .vela-stage-content { align-items: flex-start; padding: 46px 5% 118px; text-align: left; }
+.vela-stage.is-chat-mode .vela-mode-switch { margin: 0 0 24px; }
+.vela-stage.is-chat-mode .vela-eyebrow { margin-left: 4px; }
+.vela-stage.is-chat-mode .vela-stage-content > h1 { max-width: 510px; margin: 0; font-size: clamp(38px,4vw,58px); }
+.vela-stage.is-chat-mode .vela-chat-panel { position: absolute; inset: 0; width: 100%; margin: 0; pointer-events: none; }
+.vela-stage.is-chat-mode .vela-chat-turns { position: absolute; top: 190px; left: 5%; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; width: min(430px,48%); height: 190px; padding: 0; overflow: hidden; }
+.vela-stage.is-chat-mode .vela-chat-turn { max-width: 90%; animation: vela-message-in .38s ease both; }
+.vela-stage.is-chat-mode .vela-chat-turn p { background: rgba(250,253,252,.48); box-shadow: 0 8px 28px rgba(40,73,98,.045); }
+.vela-stage.is-chat-mode .vela-chat-turn.is-user p { background: rgba(20,112,187,.82); backdrop-filter: blur(14px); }
+.vela-stage.is-chat-mode .vela-chat-panel form { position: absolute; bottom: 34px; left: 5%; width: min(670px,72%); pointer-events: auto; background: rgba(255,255,253,.42); border-color: rgba(31,99,145,.16); box-shadow: 0 14px 46px rgba(31,67,94,.08); }
+.vela-stage.is-chat-mode .vela-chat-suggestions { position: absolute; bottom: 94px; left: 5%; justify-content: flex-start; padding: 0; pointer-events: auto; }
+.vela-stage.is-chat-mode .vela-chat-suggestions button { background: rgba(255,255,255,.35); backdrop-filter: blur(12px); }
+@keyframes vela-message-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+.vela-chat-document-dock { position: absolute; z-index: 9; top: 44%; right: 22px; display: grid; gap: 8px; padding: 10px 8px; border: 1px solid rgba(28,87,128,.12); border-radius: 18px; background: rgba(255,255,253,.32); box-shadow: 0 12px 38px rgba(36,68,92,.06); backdrop-filter: blur(14px); }
+.vela-chat-document-dock > span { padding: 2px 5px 5px; color: #698098; font-size: 8px; letter-spacing: .1em; text-align: center; text-transform: uppercase; }
+.vela-chat-document-dock button { display: grid; place-items: center; gap: 3px; width: 68px; height: 58px; border: 0; border-radius: 12px; color: #397092; background: rgba(255,255,255,.3); cursor: pointer; }
+.vela-chat-document-dock button:hover { color: #0878c7; background: rgba(255,255,255,.65); }
+.vela-chat-document-dock button:disabled { opacity: .45; }
+.vela-chat-document-dock svg { width: 18px; }
+.vela-chat-document-dock small { font-size: 8px; }
+
 @media (min-width: 761px) {
   .scene-recommendation .vela-stage-content { padding-left: 4%; padding-right: 37%; }
   .scene-recommendation .vela-stage h1 { margin-left: 0; }
@@ -446,7 +471,7 @@ button { color: inherit; }
 
 @media (max-width: 760px) {
   body { background: #fbfaf7; }
-  .vela-shell.is-mobile { width: 100%; min-height: 100dvh; overflow: hidden; background: #fbfaf7; }
+  .vela-shell.is-mobile { width: 100%; height: 100dvh; min-height: 0; overflow: hidden; background: #fbfaf7; }
   .vela-mobile-header {
     position: fixed;
     z-index: 20;
@@ -561,6 +586,17 @@ button { color: inherit; }
 
   .vela-camera-modal { padding-left: 14px; padding-right: 14px; }
   .vela-camera-frame { width: 100%; height: min(58dvh, 500px); }
+
+  .vela-stage.is-chat-mode .vela-stage-content { min-height: 100dvh; padding: calc(96px + env(safe-area-inset-top)) 20px calc(172px + env(safe-area-inset-bottom)); }
+  .vela-stage.is-chat-mode .vela-mode-switch { margin: 0 0 18px; }
+  .vela-stage.is-chat-mode .vela-stage-content > h1 { max-width: 84%; font-size: 38px; }
+  .vela-stage.is-chat-mode .vela-chat-turns { top: calc(218px + env(safe-area-inset-top)); left: 20px; width: calc(100% - 70px); height: 205px; }
+  .vela-stage.is-chat-mode .vela-chat-panel form { position: fixed; z-index: 31; bottom: calc(88px + env(safe-area-inset-bottom)); left: 14px; width: calc(100% - 28px); }
+  .vela-stage.is-chat-mode .vela-chat-suggestions { display: none; }
+  .vela-chat-document-dock { position: fixed; z-index: 29; top: 48%; right: 8px; padding: 7px 5px; }
+  .vela-chat-document-dock > span { display: none; }
+  .vela-chat-document-dock button { width: 48px; height: 48px; }
+  .vela-chat-document-dock small { display: none; }
 }
 
 @media (max-width: 370px) {
