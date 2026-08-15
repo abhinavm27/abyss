@@ -57,3 +57,16 @@ class AbyssWorkflow:
         self.stage = self._next_stage[self.stage]
         return self.stage
 
+    def complete_chat_intake(self) -> WorkflowStage:
+        """Finish an intake that contains no documents requiring processing consent."""
+        if self.stage != WorkflowStage.INTAKE:
+            raise RuntimeError("chat intake can only be completed from intake")
+        self.stage = WorkflowStage.COMPARE
+        return self.stage
+
+    def continue_current_coverage(self) -> WorkflowStage:
+        """Skip enrollment and transition when the user keeps current coverage."""
+        if self.stage != WorkflowStage.RECOMMEND:
+            raise RuntimeError("current coverage can only be selected from recommendation")
+        self.stage = WorkflowStage.VERIFY
+        return self.stage

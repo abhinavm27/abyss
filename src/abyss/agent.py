@@ -23,6 +23,11 @@ JSON with exactly one top-level key, facts. Each fact must contain name,
 value, source, confidence, and observed_at. Do not decide eligibility, cost,
 network status, or consent. Use these exact names when applicable:
 requested_procedure, service_date, coverage_end_date, contrast_status.
+When existing intake facts are supplied, treat the latest text as the next turn
+in that conversation. Merge body area, modality, and modifiers into a complete
+requested_procedure instead of replacing it with a fragment. For example,
+existing "ultrasound scan" plus "abdomen complete" means
+"complete abdominal ultrasound".
 Do not provide medical advice."""
 
 
@@ -114,6 +119,7 @@ def explain(question: str, evidence: dict[str, Any], client: HermesClient | None
 
 
 def extract_facts(text: str, *, source: str, observed_at: datetime | None = None,
+                  context: dict[str, Any] | None = None,
                   client: HermesClient | None = None) -> list[DecisionFact]:
     """Extract candidate facts; deterministic validation makes them usable."""
     if not text.strip() or not source.strip():
@@ -122,7 +128,12 @@ def extract_facts(text: str, *, source: str, observed_at: datetime | None = None
     hermes = client or HermesClient()
     raw = hermes.chat([
         {"role": "system", "content": EXTRACTION_PROMPT},
-        {"role": "user", "content": f"Source: {source}\nSynthetic text:\n{text.strip()}"},
+        {"role": "user", "content": (
+            f"Source: {source}\n"
+            "Existing synthetic intake context:\n"
+            f"{json.dumps(context or {}, separators=(',', ':'), default=str)}\n"
+            f"Latest user text:\n{text.strip()}"
+        )},
     ], max_tokens=500, temperature=0.0)
     try:
         candidate = raw.strip()

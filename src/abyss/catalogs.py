@@ -17,6 +17,9 @@ class PlanRecord:
     provider_ids: frozenset[str]
     facility_ids: frozenset[str]
     source: str = "seeded synthetic plan catalog"
+    is_current: bool = False
+    deductible_remaining: float = 0.0
+    coinsurance_rate: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,14 +48,17 @@ class SeededCatalog:
             "continuation": PlanRecord(
                 "continuation", "Continuation PPO", 600, 500, 700, 500, True,
                 frozenset({"dr-lee"}), frozenset({"seattle-general"}),
+                is_current=True, deductible_remaining=500, coinsurance_rate=0.20,
             ),
             "wa-plan-a": PlanRecord(
                 "wa-plan-a", "Washington Plan A", 350, 400, 650, 300, True,
                 frozenset(), frozenset({"seattle-general"}),
+                deductible_remaining=300, coinsurance_rate=0.20,
             ),
             "wa-plan-b": PlanRecord(
                 "wa-plan-b", "Washington Plan B", 400, 550, 650, 300, True,
                 frozenset({"dr-lee"}), frozenset({"seattle-general"}),
+                deductible_remaining=300, coinsurance_rate=0.10,
             ),
         }
         self.providers = {"dr-lee": ProviderRecord("dr-lee", "Dr. Lee", "seattle-general")}

@@ -2,6 +2,8 @@ from unittest import TestCase
 
 from abyss.domain import ConsentAction
 from abyss.journey import CareJourney
+from abyss.knowledge import PublishedHospitalRate
+from abyss.booking import BookingAgent, SandboxBookingService
 from abyss.agents import KnowledgeAgent, OnboardingAgent
 from abyss.domain import DecisionFact, VerificationStatus
 from datetime import UTC, datetime
@@ -9,6 +11,231 @@ from abyss.workflow import WorkflowStage
 
 
 class VerticalSliceTests(TestCase):
+    def test_complete_chat_intake_prepares_current_plan_hospital_options(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "CBC with differential", code, "HCPCS",
+                    1, 50, 50, 50, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        journey = CareJourney.open(
+            "journey-chat-current-plan", hospital_knowledge=FakeHospitalKnowledge()
+        )
+        now = datetime.now(UTC)
+        for name, value in (
+            ("requested_procedure", "Complete blood count with differential"),
+            ("procedure_code", "85025"),
+            ("service_date", "2026-08-25"),
+            ("coverage_end_date", "2026-09-30"),
+        ):
+            journey.record_fact(DecisionFact(
+                name, value, "chat", now, 1.0, VerificationStatus.SOURCE_BACKED
+            ))
+
+        journey.prepare_chat_care_options()
+
+        self.assertEqual(journey.stage, WorkflowStage.RECOMMEND)
+        self.assertEqual(journey.current_plan_options[0].plan_id, "continuation")
+        self.assertFalse(journey.workflow.care_state.consents)
+
+    def test_comparison_retrieves_hospital_evidence_for_verified_code(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                self.code = code
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "MRI knee", code, "HCPCS",
+                    2, 300, 400, 500, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        knowledge = FakeHospitalKnowledge()
+        journey = CareJourney.open("journey-knowledge", hospital_knowledge=knowledge)
+        journey.record_fact(DecisionFact(
+            "procedure_code", "73721", "procedure_catalog", datetime.now(UTC),
+            1.0, VerificationStatus.VERIFIED,
+        ))
+        journey.record_consent(
+            ConsentAction.PROCESS_DOCUMENTS, approved=True, scope="seeded documents"
+        )
+        journey.advance()
+        journey.compare(["wa-plan-b"])
+
+        self.assertEqual(knowledge.code, "73721")
+        self.assertEqual(journey.hospital_rates[0].hospital, "Hospital A")
+        event = next(
+            item for item in journey.audit.for_journey("journey-knowledge")
+            if item.event_type == "hospital_catalog_retrieved"
+        )
+        self.assertEqual(event.payload["facility_count"], 1)
+        self.assertEqual(event.payload["network_status"], "unknown")
+
+    def test_selecting_current_plan_hospital_skips_enrollment(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "MRI knee", code, "HCPCS",
+                    1, 500, 500, 500, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        journey = CareJourney.open(
+            "journey-current-path", hospital_knowledge=FakeHospitalKnowledge()
+        )
+        journey.record_fact(DecisionFact(
+            "procedure_code", "73721", "procedure_catalog", datetime.now(UTC),
+            1.0, VerificationStatus.VERIFIED,
+        ))
+        journey.record_consent(
+            ConsentAction.PROCESS_DOCUMENTS, approved=True, scope="seeded documents"
+        )
+        journey.advance()
+        journey.compare(["continuation", "wa-plan-b"])
+        journey.advance()
+        choice = journey.select_current_care_path(10)
+
+        self.assertEqual(choice.plan_id, "continuation")
+        self.assertEqual(choice.hospital, "Hospital A")
+        self.assertEqual(choice.network_status, "pending_verification")
+        self.assertEqual(journey.stage, WorkflowStage.VERIFY)
+        self.assertFalse(choice.booking_consent)
+
+        scope = "Dr. Lee / Hospital A / Continuation PPO"
+        journey.record_consent(
+            ConsentAction.SHARE_WITH_PROVIDER, approved=True, scope=scope
+        )
+        journey.execute(ConsentAction.SHARE_WITH_PROVIDER, scope, "verify-current-path")
+        self.assertEqual(journey.selected_care_path.network_status, "sandbox_verified")
+
+    def test_booking_agent_retry_completes_without_changing_approved_slot(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "MRI knee", code, "HCPCS",
+                    1, 500, 500, 500, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        class FakePreferenceModel:
+            def chat(self, messages, **kwargs):
+                return '{"date_from":"2026-08-30","date_to":"2026-09-15","time_of_day":"any"}'
+
+        journey = CareJourney.open(
+            "journey-booking-retry",
+            hospital_knowledge=FakeHospitalKnowledge(),
+            booking_agent=BookingAgent(FakePreferenceModel()),
+            booking_service=SandboxBookingService(retry_delay_seconds=0),
+        )
+        journey.record_fact(DecisionFact(
+            "procedure_code", "73721", "procedure_catalog", datetime.now(UTC),
+            1.0, VerificationStatus.VERIFIED,
+        ))
+        journey.record_consent(
+            ConsentAction.PROCESS_DOCUMENTS, approved=True, scope="seeded documents"
+        )
+        journey.advance()
+        journey.compare(["continuation", "wa-plan-b"])
+        journey.advance()
+        journey.select_current_care_path(10)
+        verify_scope = "Dr. Lee / Hospital A / Continuation PPO"
+        journey.record_consent(
+            ConsentAction.SHARE_WITH_PROVIDER, approved=True, scope=verify_scope
+        )
+        journey.execute(
+            ConsentAction.SHARE_WITH_PROVIDER, verify_scope, "verify-booking-retry"
+        )
+        journey.advance()
+        slots = journey.collect_booking_preferences("Any time in the next two weeks")
+        journey.select_booking_slot(slots[0].slot_id)
+        booking_scope = journey.booking_consent_scope
+        journey.record_consent(
+            ConsentAction.BOOK_APPOINTMENT, approved=True, scope=booking_scope
+        )
+        receipt = journey.execute(
+            ConsentAction.BOOK_APPOINTMENT,
+            booking_scope,
+            "book-retry",
+        )
+        self.assertEqual(receipt.status, "scheduled_retry")
+
+        journey.process_booking_tasks()
+        self.assertEqual(journey.stage, WorkflowStage.COMPLETE)
+        self.assertEqual(journey.receipts[-1].status, "sandbox_confirmed")
+        self.assertEqual(journey.selected_booking_slot.slot_id, slots[0].slot_id)
+
+    def test_reschedule_confirms_replacement_before_cancelling_original(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "MRI knee", code, "HCPCS",
+                    1, 500, 500, 500, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        class FakePreferenceModel:
+            def chat(self, messages, **kwargs):
+                return '{"date_from":"2026-08-30","date_to":"2026-09-15","time_of_day":"any"}'
+
+        journey = CareJourney.open(
+            "journey-reschedule",
+            hospital_knowledge=FakeHospitalKnowledge(),
+            booking_agent=BookingAgent(FakePreferenceModel()),
+            booking_service=SandboxBookingService(retry_delay_seconds=0),
+        )
+        journey.record_fact(DecisionFact(
+            "procedure_code", "73721", "procedure_catalog", datetime.now(UTC),
+            1.0, VerificationStatus.VERIFIED,
+        ))
+        journey.record_consent(ConsentAction.PROCESS_DOCUMENTS, approved=True, scope="docs")
+        journey.advance()
+        journey.compare(["continuation", "wa-plan-b"])
+        journey.advance()
+        journey.select_current_care_path(10)
+        verify_scope = "Dr. Lee / Hospital A / Continuation PPO"
+        journey.record_consent(ConsentAction.SHARE_WITH_PROVIDER, approved=True, scope=verify_scope)
+        journey.execute(ConsentAction.SHARE_WITH_PROVIDER, verify_scope, "verify-reschedule")
+        journey.advance()
+        first_slots = journey.collect_booking_preferences("Any time")
+        journey.select_booking_slot(first_slots[0].slot_id)
+        original_scope = journey.booking_consent_scope
+        journey.record_consent(ConsentAction.BOOK_APPOINTMENT, approved=True, scope=original_scope)
+        journey.execute(ConsentAction.BOOK_APPOINTMENT, original_scope, "book-original")
+        journey.process_booking_tasks()
+        original_slot_id = journey.selected_booking_slot.slot_id
+        self.assertEqual(journey.stage, WorkflowStage.COMPLETE)
+
+        replacements = journey.begin_reschedule("Move it later")
+        journey.select_booking_slot(replacements[0].slot_id)
+        booking_scope = journey.booking_consent_scope
+        cancellation_scope = journey.cancellation_consent_scope
+        journey.record_consent(ConsentAction.BOOK_APPOINTMENT, approved=True, scope=booking_scope)
+        journey.record_consent(ConsentAction.CANCEL_APPOINTMENT, approved=True, scope=cancellation_scope)
+        replacement, cancellation = journey.execute_reschedule(
+            booking_scope=booking_scope,
+            cancellation_scope=cancellation_scope,
+            idempotency_key="reschedule-1",
+        )
+        self.assertEqual(replacement.status, "sandbox_confirmed")
+        self.assertEqual(cancellation.status, "sandbox_confirmed")
+        self.assertEqual(journey.booking_service.slot(original_slot_id).status, "cancelled")
+        self.assertEqual(journey.booking_service.slot(journey.selected_booking_slot.slot_id).status, "booked")
+
     def test_onboarding_agent_is_orchestrated_into_fact_ledger(self) -> None:
         class FakeModel:
             def chat(self, messages, **kwargs):
@@ -30,6 +257,71 @@ class VerticalSliceTests(TestCase):
         journey.onboard("I want an MRI scan for my knee", source="user_request")
         self.assertIsNone(journey.procedure_resolution.code)
         self.assertIn("procedure_code_confirmation", journey.onboarding_missing)
+        self.assertIn("MRI knee without contrast", " ".join(journey.onboarding_questions))
+
+    def test_unknown_procedure_gets_catalog_neutral_clarification(self) -> None:
+        class FakeModel:
+            def chat(self, messages, **kwargs):
+                return '{"facts":[{"name":"requested_procedure","value":"ultrasound scan","confidence":0.95}]}'
+
+        journey = CareJourney.open(
+            "journey-ultrasound",
+            onboarding_agent=OnboardingAgent(FakeModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("book an ultrasound scan", source="user_request")
+        questions = " ".join(journey.onboarding_questions)
+        self.assertIn("body area", questions)
+        self.assertIn("matching catalog entry", questions)
+        self.assertNotIn("MRI knee", questions)
+
+    def test_complete_abdominal_ultrasound_resolves_from_explicit_reply(self) -> None:
+        class FakeModel:
+            def chat(self, messages, **kwargs):
+                # The extraction model may omit a modifier; terminology
+                # resolution must still inspect the user's explicit reply.
+                return '{"facts":[{"name":"requested_procedure","value":"Abdominal ultrasound","confidence":0.9}]}'
+
+        journey = CareJourney.open(
+            "journey-abdominal-ultrasound",
+            onboarding_agent=OnboardingAgent(FakeModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("Abdominal ultrasound, complete.", source="user_request")
+        self.assertEqual(journey.procedure_resolution.code, "76700")
+        self.assertEqual(
+            journey.workflow.care_state.facts["procedure_code"].value, "76700"
+        )
+        self.assertNotIn("procedure_code_confirmation", journey.onboarding_missing)
+
+    def test_onboarding_merges_procedure_fragments_across_turns(self) -> None:
+        class SequencedModel:
+            def __init__(self):
+                self.responses = iter([
+                    '{"facts":[{"name":"requested_procedure","value":"ultrasound scan","confidence":0.9}]}',
+                    '{"facts":[{"name":"requested_procedure","value":"abdomen","confidence":0.7},'
+                    '{"name":"service_date","value":"aug 25","confidence":0.95},'
+                    '{"name":"coverage_end_date","value":"sept 30","confidence":0.95}]}',
+                ])
+
+            def chat(self, messages, **kwargs):
+                return next(self.responses)
+
+        journey = CareJourney.open(
+            "journey-fragment-merge",
+            onboarding_agent=OnboardingAgent(SequencedModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("do an ultrasound scan", source="user_request")
+        journey.onboard(
+            "aug 25, sept 30, abdomen complete", source="user_request"
+        )
+        facts = journey.workflow.care_state.facts
+        self.assertEqual(facts["requested_procedure"].value, "Complete abdominal ultrasound")
+        self.assertEqual(facts["procedure_code"].value, "76700")
+        self.assertEqual(facts["service_date"].value, "aug 25")
+        self.assertEqual(facts["coverage_end_date"].value, "sept 30")
+        self.assertEqual(journey.onboarding_missing, ())
 
     def test_onboarding_accumulates_facts_and_routes_confirmation_through_knowledge(self) -> None:
         class SequencedModel:

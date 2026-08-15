@@ -33,8 +33,12 @@ class OnboardingAgent:
     def __init__(self, client: HermesClient | ChatModel | None = None) -> None:
         self.client = client
 
-    def extract(self, text: str, *, source: str) -> FactProposal:
-        facts = extract_facts(text, source=source, client=self.client)  # type: ignore[arg-type]
+    def extract(
+        self, text: str, *, source: str, context: dict[str, Any] | None = None
+    ) -> FactProposal:
+        facts = extract_facts(
+            text, source=source, context=context, client=self.client
+        )  # type: ignore[arg-type]
         names = {fact.name for fact in facts}
         required = {
             "requested_procedure": "What care or procedure are you trying to arrange?",
@@ -84,7 +88,13 @@ class MatchingAgent:
             raise ValueError("plan_ids and provider_id are required")
         return MatchingRequest(tuple(plan_ids), provider_id)
 
-    def reason_about_evaluation(self, evaluations: list[PathEvaluation], *, question: str) -> str:
+    def reason_about_evaluation(
+        self,
+        evaluations: list[PathEvaluation],
+        *,
+        question: str,
+        care_path_context: dict[str, Any] | None = None,
+    ) -> str:
         """Ask Nemotron to explain deterministic outcomes, never to choose them."""
         if not evaluations:
             raise ValueError("evaluations are required")
@@ -96,6 +106,8 @@ class MatchingAgent:
                 for item in evaluations
             ],
         }
+        if care_path_context is not None:
+            evidence["care_path_context"] = care_path_context
         return explain(question, evidence, client=self.client)  # type: ignore[arg-type]
 
 

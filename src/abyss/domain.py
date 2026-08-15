@@ -22,6 +22,7 @@ class ConsentAction(StrEnum):
     TRANSITION_COVERAGE = "transition_coverage"
     SHARE_WITH_PROVIDER = "share_with_provider"
     BOOK_APPOINTMENT = "book_appointment"
+    CANCEL_APPOINTMENT = "cancel_appointment"
 
 
 @dataclass(frozen=True, slots=True)
