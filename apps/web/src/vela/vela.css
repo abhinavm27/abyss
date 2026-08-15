@@ -372,7 +372,7 @@ button { color: inherit; }
 .vela-mode-switch svg { width: 13px; }
 .vela-listener { transform: scale(calc(1 + var(--energy, 0) * .035)); }
 
-.vela-chat-panel { width: min(600px, 88%); margin-top: 28px; border: 1px solid rgba(29,53,83,.11); border-radius: 21px; background: rgba(255,254,251,.82); box-shadow: 0 15px 42px rgba(44,58,75,.1); overflow: hidden; text-align: left; backdrop-filter: blur(18px); }
+.vela-chat-panel { position: relative; z-index: 8; width: min(600px, 88%); margin-top: 28px; border: 1px solid rgba(29,53,83,.11); border-radius: 21px; background: rgba(255,254,251,.9); box-shadow: 0 15px 42px rgba(44,58,75,.1); overflow: hidden; text-align: left; pointer-events: auto; backdrop-filter: blur(18px); }
 .vela-chat-turns { display: grid; gap: 12px; max-height: 215px; padding: 17px; overflow-y: auto; }
 .vela-chat-turn { max-width: 82%; }
 .vela-chat-turn > span { display: block; margin: 0 0 4px 5px; color: #8490a0; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
@@ -385,7 +385,7 @@ button { color: inherit; }
 .vela-chat-turn.is-typing i:nth-child(2) { animation-delay: .15s; }.vela-chat-turn.is-typing i:nth-child(3) { animation-delay: .3s; }
 @keyframes vela-typing { to { transform: translateY(-4px); opacity: .4; } }
 .vela-chat-panel form { display: grid; grid-template-columns: 1fr 38px; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--vela-line); }
-.vela-chat-panel input { min-width: 0; padding: 10px 12px; border: 0; outline: 0; color: #183961; background: transparent; font-size: 13px; }
+.vela-chat-panel input { position: relative; z-index: 1; min-width: 0; padding: 10px 12px; border: 0; outline: 0; color: #183961; background: #fff; font-size: 16px; pointer-events: auto; user-select: text; -webkit-user-select: text; }
 .vela-chat-panel form button { display: grid; place-items: center; border: 0; border-radius: 10px; color: #fff; background: #1777c4; cursor: pointer; }
 .vela-chat-panel form button:disabled { opacity: .35; }.vela-chat-panel form svg { width: 16px; }
 .vela-chat-suggestions { display: flex; gap: 7px; padding: 0 12px 12px; }
