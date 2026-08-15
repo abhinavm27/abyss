@@ -86,8 +86,10 @@ export function NeuralPath({ progress, energy = 0, resolved = false, className =
         const nearest = points[(index * 7 + 13) % points.length];
         const nx = nearest.x * width;
         const ny = nearest.y * height;
-        const reveal = point.depth <= active + 0.12;
-        const alpha = reveal ? 0.11 + active * 0.16 : 0.035;
+        const reveal = active > 0.025 && point.depth <= active;
+        const alpha = resolvedRef.current
+          ? reveal ? 0.07 : 0.018
+          : reveal ? 0.09 + active * 0.16 : 0.025;
         context.beginPath();
         context.moveTo(x, y);
         context.quadraticCurveTo((x + nx) / 2, Math.min(y, ny) - height * 0.04, nx, ny);
@@ -97,12 +99,12 @@ export function NeuralPath({ progress, energy = 0, resolved = false, className =
         context.lineWidth = reveal ? 0.8 : 0.45;
         context.stroke();
 
-        const pulse = reveal ? 1 + Math.sin(time * (2.5 + voiceEnergy * 7) + index) * (0.28 + voiceEnergy * 0.7) : 0.7;
+        const pulse = reveal ? 1 + Math.sin(time * (2.5 + voiceEnergy * 7) + index) * (0.28 + voiceEnergy * 0.7) : 0.55;
         context.beginPath();
         context.arc(x, y, (1.1 + point.depth * 2.4) * pulse, 0, Math.PI * 2);
         context.fillStyle = reveal
           ? `rgba(104, 176, 238, ${0.18 + active * 0.38 + voiceEnergy * 0.22})`
-          : "rgba(120, 147, 180, 0.09)";
+          : "rgba(120, 147, 180, 0.045)";
         context.fill();
       });
 
@@ -117,15 +119,19 @@ export function NeuralPath({ progress, energy = 0, resolved = false, className =
           if (step === 0) context.moveTo(x, y);
           else context.lineTo(x, y);
         }
-        const laneActive = active >= lane * 0.17;
-        context.strokeStyle = lane === 2 && resolvedRef.current
+        const thresholds = [0.12, 0.28, 0.06, 0.42, 0.58];
+        const laneActive = active >= thresholds[lane];
+        const winningLane = lane === 2 && resolvedRef.current;
+        context.strokeStyle = winningLane
           ? "rgba(95, 224, 247, 0.93)"
-          : laneActive
+          : resolvedRef.current
+            ? "rgba(122, 143, 170, 0.045)"
+            : laneActive
             ? lane % 2 === 0 ? "rgba(89, 201, 245, 0.36)" : "rgba(137, 112, 255, 0.28)"
-            : "rgba(122, 143, 170, 0.07)";
-        context.lineWidth = lane === 2 && resolvedRef.current ? 3.4 + voiceEnergy * 2.2 : laneActive ? 1.25 + voiceEnergy * 0.8 : 0.65;
-        context.shadowColor = lane === 2 && resolvedRef.current ? "rgba(63, 205, 247, 0.75)" : "transparent";
-        context.shadowBlur = lane === 2 && resolvedRef.current ? 18 : 0;
+            : "rgba(122, 143, 170, 0.035)";
+        context.lineWidth = winningLane ? 3.4 + voiceEnergy * 2.2 : laneActive && !resolvedRef.current ? 1.25 + voiceEnergy * 0.8 : 0.55;
+        context.shadowColor = winningLane ? "rgba(63, 205, 247, 0.75)" : "transparent";
+        context.shadowBlur = winningLane ? 18 : 0;
         context.stroke();
       });
       context.shadowBlur = 0;

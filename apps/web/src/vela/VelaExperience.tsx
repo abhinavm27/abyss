@@ -257,7 +257,7 @@ function CompleteCard({ onReset }: { onReset: () => void }) {
 type ChatTurn = { role: "user" | "assistant"; text: string };
 
 function ChatPanel({ turns, value, busy, onValue, onSend }: { turns: ChatTurn[]; value: string; busy: boolean; onValue: (value: string) => void; onSend: () => void }) {
-  return <section className="vela-chat-panel" aria-label="Chat with VELA"><div className="vela-chat-turns">{turns.map((turn, index) => <div className={`vela-chat-turn is-${turn.role}`} key={`${turn.role}-${index}`}><span>{turn.role === "assistant" ? "VELA" : "You"}</span><p>{turn.text}</p></div>)}{busy && <div className="vela-chat-turn is-assistant is-typing"><span>VELA</span><p><i /><i /><i /></p></div>}</div><form onSubmit={(event) => { event.preventDefault(); onSend(); }}><input autoFocus type="text" enterKeyHint="send" value={value} onChange={(event) => onValue(event.currentTarget.value)} placeholder="Tell VELA what care you need…" aria-label="Message VELA" /><button type="submit" disabled={!value.trim() || busy} aria-label="Send message"><Send /></button></form><div className="vela-chat-suggestions"><button type="button" onClick={() => onValue("I need a knee MRI and want to understand what it will cost.")}>I need an MRI</button><button type="button" onClick={() => onValue("Help me compare my insurance options.")}>Compare coverage</button></div></section>;
+  return <section className="vela-chat-panel" aria-label="Chat with VELA"><div className="vela-chat-turns">{turns.slice(-3).map((turn, index) => <div className={`vela-chat-turn is-${turn.role}`} key={`${turn.role}-${index}`}><span>{turn.role === "assistant" ? "VELA" : "You"}</span><p>{turn.text}</p></div>)}{busy && <div className="vela-chat-turn is-assistant is-typing"><span>VELA is reasoning</span><p><i /><i /><i /></p></div>}</div><form onSubmit={(event) => { event.preventDefault(); onSend(); }}><MessageCircle aria-hidden /><input autoFocus type="text" enterKeyHint="send" value={value} onChange={(event) => onValue(event.currentTarget.value)} placeholder="Describe the care you need…" aria-label="Message VELA" /><button type="submit" disabled={!value.trim() || busy} aria-label="Send message"><Send /></button></form><div className="vela-chat-suggestions"><button type="button" onClick={() => onValue("I need a knee MRI and want to understand what it will cost.")}>I need an MRI</button><button type="button" onClick={() => onValue("Help me compare my insurance options.")}>Compare coverage</button></div></section>;
 }
 
 export function VelaExperience() {
@@ -289,7 +289,7 @@ export function VelaExperience() {
   const progress = Math.max(0, index / (sceneOrder.length - 1));
   const copy = sceneCopy[scene];
   const resolved = ["recommendation", "consent", "booking", "complete"].includes(scene);
-  const voiceLevel = liveMode ? voice.micLevel : demoMic.level;
+  const voiceLevel = inputMode === "chat" && chatBusy ? .72 : liveMode ? voice.micLevel : demoMic.level;
   const agentCount = useMemo(() => {
     if (scene === "working") return 2;
     if (["decision", "verifying"].includes(scene)) return 3;
