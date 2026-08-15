@@ -5,10 +5,20 @@ from abyss.workflow import AbyssWorkflow, ConsentRequired, WorkflowStage
 
 
 class WorkflowTests(TestCase):
+    def test_current_coverage_path_skips_enrollment_and_transition(self) -> None:
+        workflow = AbyssWorkflow(CareState("session-current"), WorkflowStage.RECOMMEND)
+        self.assertEqual(workflow.continue_current_coverage(), WorkflowStage.VERIFY)
+
     def test_intake_requires_document_consent(self) -> None:
         workflow = AbyssWorkflow(CareState(session_id="demo"))
         with self.assertRaises(ConsentRequired):
             workflow.advance()
+
+    def test_chat_only_intake_does_not_create_document_consent(self) -> None:
+        workflow = AbyssWorkflow(CareState(session_id="demo-chat"))
+
+        self.assertEqual(workflow.complete_chat_intake(), WorkflowStage.COMPARE)
+        self.assertFalse(workflow.care_state.consents)
 
     def test_separate_enrollment_and_transition_approvals(self) -> None:
         state = CareState(session_id="demo")
@@ -33,4 +43,3 @@ class WorkflowTests(TestCase):
 
         with self.assertRaises(ConsentRequired):
             workflow.advance()
-

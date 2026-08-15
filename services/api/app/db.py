@@ -151,13 +151,19 @@ CREATE INDEX IF NOT EXISTS idx_history_asked ON lookup_history(asked_at DESC);
 -- it is expected to cost, so the estimate does not evaporate after the call.
 CREATE TABLE IF NOT EXISTS appointment (
   id             INTEGER PRIMARY KEY,
+  appointment_id TEXT UNIQUE,
   user_id        INTEGER REFERENCES user(id) ON DELETE CASCADE,
+  journey_id     TEXT,
+  slot_id        TEXT,
   hospital_id    INTEGER REFERENCES hospital(id),
   code           TEXT,
   description    TEXT,
   booked_for     TEXT,     -- ISO date the member gave
   estimated_cost REAL,
   note           TEXT,
+  status         TEXT NOT NULL DEFAULT 'confirmed',
+  source         TEXT NOT NULL DEFAULT 'member_reported',
+  updated_at     TEXT,
   created_at     TEXT NOT NULL
 );
 -- The index on (user_id, booked_for) is created by migrate(), not here: on a
@@ -177,6 +183,34 @@ CREATE TABLE IF NOT EXISTS ingest_run (
   started_at     TEXT,
   finished_at    TEXT
 );
+
+-- Durable user-scoped journey index. snapshot_json is an auditable sandbox
+-- projection; deterministic domain objects remain the action authority.
+CREATE TABLE IF NOT EXISTS care_journey (
+  journey_id    TEXT PRIMARY KEY,
+  user_id       INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  stage         TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_care_journey_user
+  ON care_journey(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS care_agent_trace (
+  correlation_id TEXT PRIMARY KEY,
+  utterance_id   TEXT NOT NULL,
+  user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  journey_id     TEXT,
+  intent         TEXT NOT NULL,
+  plan_json      TEXT NOT NULL,
+  message        TEXT NOT NULL,
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_care_agent_trace_user
+  ON care_agent_trace(user_id, created_at DESC);
 """
 
 
@@ -207,10 +241,16 @@ _ADDED_COLUMNS = {
     "plan": [("user_id", "INTEGER"), ("is_active", "INTEGER NOT NULL DEFAULT 1")],
     "lookup_history": [("user_id", "INTEGER")],
     "appointment": [
+        ("appointment_id", "TEXT"),
         ("user_id", "INTEGER"),
+        ("journey_id", "TEXT"),
+        ("slot_id", "TEXT"),
         ("booked_for", "TEXT"),
         ("estimated_cost", "REAL"),
         ("note", "TEXT"),
+        ("status", "TEXT NOT NULL DEFAULT 'confirmed'"),
+        ("source", "TEXT NOT NULL DEFAULT 'member_reported'"),
+        ("updated_at", "TEXT"),
     ],
 }
 
@@ -236,6 +276,8 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     # Safe now that the columns above exist on both fresh and migrated databases.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_appt_user ON appointment(user_id, booked_for)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_appt_external ON appointment(appointment_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_appt_journey ON appointment(journey_id, status)")
     conn.commit()
 
 

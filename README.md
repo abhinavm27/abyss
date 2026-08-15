@@ -227,6 +227,15 @@ Read [docs/SECURITY.md](docs/SECURITY.md) before handling any document or connec
 - Persist the event ledger and encrypted user memory outside the process local demo store.
 - Conduct formal threat modeling, privacy review, accessibility testing, and clinical safety review.
 
+### Hospital knowledge engine
+
+Set `ABYSS_KNOWLEDGE_DB` to the knowledge engine's SQLite database to make the
+care journey retrieve hospital machine-readable-file rates for its verified
+procedure code. The adapter opens this database read-only. Returned records
+include the hospital source URL, publication/retrieval timestamps, confidence,
+and verification state. Published rates are facility evidence—not proof of
+insurance network participation or a guaranteed member out-of-pocket price.
+
 ## Repository map
 
 ```text

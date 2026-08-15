@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -20,12 +21,39 @@ class ProcedureCatalog:
     _records = {
         "73721": "MRI knee without contrast",
         "73722": "MRI knee with contrast",
+        "76700": "Complete abdominal ultrasound",
+        "85025": "Complete blood count with differential",
     }
 
+    def names_for(self, codes: tuple[str, ...]) -> tuple[str, ...]:
+        """Return only source-backed display names for known candidate codes."""
+        return tuple(self._records[code] for code in codes if code in self._records)
+
     def resolve(self, phrase: str, *, confirmed_code: str | None = None) -> ProcedureResolution:
-        normalized = " ".join(phrase.lower().replace("-", " ").split())
+        normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", phrase.lower()).split())
+        tokens = set(normalized.split())
         if confirmed_code in self._records:
             return ProcedureResolution(confirmed_code, self._records[confirmed_code], "confirmed")
+        if normalized in {
+            "abdominal ultrasound complete", "complete abdominal ultrasound",
+            "ultrasound abdomen complete", "complete ultrasound abdomen",
+            "us exam abdomen complete", "us exam abdom complete",
+        } or (
+            "ultrasound" in tokens
+            and "complete" in tokens
+            and bool({"abdomen", "abdominal"} & tokens)
+        ):
+            return ProcedureResolution("76700", self._records["76700"], "source_backed")
+        if normalized in {
+            "cbc with differential", "cbc with diff",
+            "complete blood count with differential",
+            "complete blood count with diff",
+            "complete cbc with auto diff wbc",
+        } or (
+            ("cbc" in tokens or {"complete", "blood", "count"} <= tokens)
+            and bool({"differential", "diff"} & tokens)
+        ):
+            return ProcedureResolution("85025", self._records["85025"], "source_backed")
         if normalized in {"73721", "mri knee without contrast", "knee mri without contrast", "mri knee no contrast"}:
             return ProcedureResolution("73721", self._records["73721"], "source_backed")
         if normalized in {"73722", "mri knee with contrast", "knee mri with contrast"}:

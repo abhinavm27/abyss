@@ -261,6 +261,118 @@ export interface CareJourneySnapshot {
     annual_premium: number;
     hard_failures: string[];
   }[];
+  hospital_rates: {
+    hospital_id: number;
+    hospital: string;
+    address: string | null;
+    description: string | null;
+    procedure_code: string;
+    code_type: string | null;
+    rate_count: number;
+    low: number;
+    typical: number;
+    high: number;
+    source: { mrf_url: string | null; source_page_url: string | null; published_at: string | null; retrieved_at: string };
+    confidence: number;
+    verification_status: string;
+    consent_requirement: string;
+    network_status: "unknown";
+  }[];
+  current_plan: string;
+  current_plan_name: string;
+  current_plan_options: {
+    plan_id: string;
+    plan_name: string;
+    coverage_status: "current";
+    hospital_id: number;
+    hospital: string;
+    address: string | null;
+    procedure_code: string;
+    published_typical_rate: number;
+    published_low_rate: number;
+    published_high_rate: number;
+    estimated_member_cost: number;
+    estimated_annual_total: number;
+    deductible_remaining: number;
+    coinsurance_rate: number;
+    network_status: "pending_verification";
+    estimate_status: "scenario_not_guarantee";
+    source_page_url: string | null;
+    rate_published_at: string | null;
+  }[];
+  alternative_plan: {
+    plan_id: string;
+    plan_name: string;
+    hospital_id: number;
+    hospital: string;
+    estimated_member_cost: number;
+    estimated_annual_total: number;
+    estimated_annual_savings: number;
+    requires_plan_switch: true;
+    action_status: "exploration_only";
+  } | null;
+  selected_care_path: {
+    plan_id: string;
+    plan_name: string;
+    coverage_status: "current";
+    hospital_id: number;
+    hospital: string;
+    procedure_code: string;
+    published_typical_rate: number;
+    estimated_member_cost: number;
+    network_status: "pending_verification" | "sandbox_verified";
+    selected_at: string;
+    booking_consent: boolean;
+  } | null;
+  booking_preferences: {
+    date_from: string;
+    date_to: string;
+    time_of_day: "morning" | "afternoon" | "any";
+    source: string;
+    confidence: number;
+  } | null;
+  booking_slots: {
+    slot_id: string;
+    hospital_id: number;
+    hospital: string;
+    procedure_code: string;
+    starts_at: string;
+    duration_minutes: number;
+    status: string;
+    source: string;
+    retry_demo: boolean;
+    consent_scope: string;
+  }[];
+  selected_booking_slot: {
+    slot_id: string;
+    hospital_id: number;
+    hospital: string;
+    procedure_code: string;
+    starts_at: string;
+    duration_minutes: number;
+    status: string;
+    source: string;
+    retry_demo: boolean;
+    consent_scope: string;
+  } | null;
+  booking_consent_scope: string | null;
+  booking_tasks: {
+    task_id: string;
+    slot_id: string;
+    status: "scheduled" | "completed" | "needs_user_action";
+    attempts: number;
+    next_attempt_at: string;
+    last_error: string;
+    created_at: string;
+    completed_at: string | null;
+  }[];
+  notifications: {
+    notification_id: string;
+    kind: string;
+    message: string;
+    created_at: string;
+    read: boolean;
+  }[];
   receipts: {
     action: string;
     status: string;
@@ -475,6 +587,23 @@ export const api = {
 
   journeyCompare: (journeyId: string) =>
     req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/compare`, { method: "POST" }),
+
+  journeySelectCurrentPath: (journeyId: string, hospitalId: number) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/selection`, {
+      method: "POST",
+      body: JSON.stringify({ hospital_id: hospitalId }),
+    }),
+
+  journeyBookingPreferences: (journeyId: string, text: string) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/booking/preferences`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+
+  journeySelectBookingSlot: (journeyId: string, slotId: string) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/booking/slots/${encodeURIComponent(slotId)}/select`, {
+      method: "POST",
+    }),
 
   journeyMatchingReason: (journeyId: string, question?: string) =>
     req<{ reason: string; journey: CareJourneySnapshot }>(`/api/journeys/${encodeURIComponent(journeyId)}/matching-reason`, {
