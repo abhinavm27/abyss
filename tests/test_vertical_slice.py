@@ -225,6 +225,23 @@ class VerticalSliceTests(TestCase):
         journey.onboard("I want an MRI scan for my knee", source="user_request")
         self.assertIsNone(journey.procedure_resolution.code)
         self.assertIn("procedure_code_confirmation", journey.onboarding_missing)
+        self.assertIn("MRI knee without contrast", " ".join(journey.onboarding_questions))
+
+    def test_unknown_procedure_gets_catalog_neutral_clarification(self) -> None:
+        class FakeModel:
+            def chat(self, messages, **kwargs):
+                return '{"facts":[{"name":"requested_procedure","value":"ultrasound scan","confidence":0.95}]}'
+
+        journey = CareJourney.open(
+            "journey-ultrasound",
+            onboarding_agent=OnboardingAgent(FakeModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("book an ultrasound scan", source="user_request")
+        questions = " ".join(journey.onboarding_questions)
+        self.assertIn("body area", questions)
+        self.assertIn("matching catalog entry", questions)
+        self.assertNotIn("MRI knee", questions)
 
     def test_onboarding_accumulates_facts_and_routes_confirmation_through_knowledge(self) -> None:
         class SequencedModel:

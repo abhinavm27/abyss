@@ -22,6 +22,10 @@ class ProcedureCatalog:
         "73722": "MRI knee with contrast",
     }
 
+    def names_for(self, codes: tuple[str, ...]) -> tuple[str, ...]:
+        """Return only source-backed display names for known candidate codes."""
+        return tuple(self._records[code] for code in codes if code in self._records)
+
     def resolve(self, phrase: str, *, confirmed_code: str | None = None) -> ProcedureResolution:
         normalized = " ".join(phrase.lower().replace("-", " ").split())
         if confirmed_code in self._records:

@@ -117,7 +117,20 @@ class CareJourney:
         questions = [required[name] for name in missing]
         if self.procedure_resolution is not None and self.procedure_resolution.needs_confirmation:
             missing.append("procedure_code_confirmation")
-            questions.append("Should this be an MRI knee without contrast or with contrast?")
+            if self.procedure_resolution.candidates:
+                candidate_names = self.procedure_catalog.names_for(
+                    self.procedure_resolution.candidates
+                )
+                choices = " or ".join(candidate_names)
+                questions.append(
+                    f"Should this be {choices}?" if choices
+                    else "Which specific procedure did your clinician order?"
+                )
+            else:
+                questions.append(
+                    "What body area and specific type of procedure did your clinician order? "
+                    "I need those details to find the matching catalog entry."
+                )
         self.onboarding_missing = tuple(missing)
         self.onboarding_questions = tuple(questions)
         self.audit.append(self.journey_id, "onboarding_completed", actor="onboarding_agent",
