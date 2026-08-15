@@ -1,0 +1,12 @@
+{
+  "title": "ABYSS Care Journey Demo",
+  "target_duration_seconds": 64,
+  "scenes": [
+    {"id":"S01","duration_seconds":8,"script_ref":"S01","purpose":"Start request","voice":"narrator","emotion":"curious","visuals":["ui_capture"],"motion":"Slow push in","validation":"Initial request visible"},
+    {"id":"S02","duration_seconds":11,"script_ref":"S02","purpose":"Show agent questions","voice":"narrator","emotion":"clear","visuals":["ui_capture"],"motion":"Hold on questions","validation":"Three missing facts readable"},
+    {"id":"S03","duration_seconds":10,"script_ref":"S03","purpose":"Resolve state","voice":"narrator","emotion":"relief","visuals":["ui_capture"],"motion":"Crossfade to consent","validation":"No repeated questions"},
+    {"id":"S04","duration_seconds":12,"script_ref":"S04","purpose":"Show deterministic ranking","voice":"narrator","emotion":"confident","visuals":["ui_capture"],"motion":"Pan to comparison","validation":"All plan totals readable"},
+    {"id":"S05","duration_seconds":12,"script_ref":"S05","purpose":"Show explanation and consent","voice":"narrator","emotion":"confident","visuals":["ui_capture"],"motion":"Crossfade through receipts","validation":"Explanation and receipts visible"},
+    {"id":"S06","duration_seconds":11,"script_ref":"S06","purpose":"Close on completion","voice":"narrator","emotion":"recap","visuals":["ui_capture"],"motion":"Hold final state","validation":"Complete and four receipts visible"}
+  ]
+}

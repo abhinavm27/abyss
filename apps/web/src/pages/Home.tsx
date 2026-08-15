@@ -77,6 +77,9 @@ export function Home({
   onAsk: (question?: string, viaVoice?: boolean) => void;
   onOpenPlan: () => void;
   onOpen: (where: HomeDestination) => void;
+  onOpenJourney: () => void;
+  onOpenAdmin: () => void;
+  onOpenChatLab: () => void;
 }) {
   const [plan, setPlan] = useState<PlanSnapshotResponse | null>(null);
   const [recent, setRecent] = useState<RecentLookup[]>([]);
@@ -123,6 +126,9 @@ export function Home({
         </section>
 
         <section className="abyss-home__features" aria-label="ABYSS features">
+          <button onClick={onOpenJourney}><span>→</span><b>Plan a care journey</b><small>Compare coverage for a specific care request.</small></button>
+          <button onClick={onOpenAdmin}><span>◌</span><b>Operations console</b><small>Inspect agent handoffs and journey events.</small></button>
+          <button onClick={onOpenChatLab}><span>✦</span><b>Journey chat lab</b><small>Test the live backend from a conversation.</small></button>
           <button onClick={() => onOpen("coverage")}><span>⌖</span><b>Find Care</b><small>Compare in-network providers and facilities.</small></button>
           <button onClick={() => onAsk()}><span>$</span><b>Understand Costs</b><small>See real costs before you get care.</small></button>
           <button onClick={onOpenPlan}><span>✓</span><b>Feel Confident</b><small>Make informed decisions with confidence.</small></button>

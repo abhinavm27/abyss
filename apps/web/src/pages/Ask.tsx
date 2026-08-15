@@ -432,6 +432,16 @@ function DiveScene({
           <button className={active ? "dive-voice__orb is-live" : "dive-voice__orb"} onClick={onVoice} aria-label={active ? "Stop talking to ABYSS" : "Talk to ABYSS"}>
             {active ? <Square aria-hidden /> : <Mic aria-hidden />}
           </button>
+          {active && (
+            <button
+              type="button"
+              onClick={onVoice}
+              className="mt-3 rounded-full border border-destructive px-5 py-2 text-sm font-semibold text-destructive"
+              aria-label="Stop listening"
+            >
+              Stop listening
+            </button>
+          )}
           <h2>{active ? "I’m listening. Ask me naturally." : "Tap to ask anything about healthcare costs."}</h2>
           <p>{active ? VOICE_LABEL[voiceStatus as keyof typeof VOICE_LABEL] : "Ready when you are"}</p>
           <button className="dive-voice__chat" onClick={() => onMode("chat")}>or type a question</button>

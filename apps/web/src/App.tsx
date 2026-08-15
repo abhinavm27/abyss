@@ -7,6 +7,9 @@ import { Ask } from "@/pages/Ask";
 import { Bill } from "@/pages/Bill";
 import { Coverage } from "@/pages/Coverage";
 import { Insurance } from "@/pages/Insurance";
+import { Journey } from "@/pages/Journey";
+import { AdminDashboard } from "@/pages/AdminDashboard";
+import { JourneyChat } from "@/pages/JourneyChat";
 import { Home } from "@/pages/Home";
 import { Onboarding } from "@/pages/Onboarding";
 import { PlanPage } from "@/pages/PlanPage";
@@ -19,7 +22,7 @@ import { api, getToken, NotSignedIn, type PlanBody } from "@/lib/api";
 type Phase = "loading" | "welcome" | "signedOut" | "onboarding" | "shell" | "offline";
 
 /** A screen pushed over a tab, rather than a tab of its own. */
-type Overlay = "coverage" | "insurance" | "appointments" | "bill" | null;
+type Overlay = "coverage" | "insurance" | "appointments" | "bill" | "journey" | "admin" | "chatlab" | null;
 
 const WELCOME_SEEN = "abyss.welcomeSeen";
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
@@ -153,6 +156,7 @@ export default function App() {
   }
 
   useEffect(() => {
+    document.getElementById("boot-fallback")?.remove();
     void load();
     // Replace rather than push, so the first back press leaves the app instead
     // of stepping through a tab the person never chose.
@@ -249,6 +253,9 @@ export default function App() {
         {overlay === "appointments" && (
           <Appointments dataVersion={dataVersion} onBack={back} onChanged={refreshData} />
         )}
+        {overlay === "journey" && <Journey onBack={back} />}
+        {overlay === "admin" && <AdminDashboard onBack={back} />}
+        {overlay === "chatlab" && <JourneyChat onBack={back} />}
         <TabBar active={tab} onChange={goTab} />
       </div>
     );
@@ -268,6 +275,9 @@ export default function App() {
             }}
             onOpenPlan={() => goTab("plan")}
             onOpen={(where) => (where === "ask" ? goTab("ask") : openOverlay(where))}
+            onOpenJourney={() => openOverlay("journey")}
+            onOpenAdmin={() => openOverlay("admin")}
+            onOpenChatLab={() => openOverlay("chatlab")}
           />
         </div>
       )}

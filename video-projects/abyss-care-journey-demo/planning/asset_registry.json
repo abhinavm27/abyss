@@ -1,0 +1,8 @@
+{
+  "voices": {"narrator":{"provider":"HeyGen Starfish","style":"calm technical product narrator"}},
+  "characters": {},
+  "backgrounds": {"canvas":{"color":"#eefafa"}},
+  "components": {"ui_capture":{"type":"browser screenshot","source":"live GN100 deployment"}},
+  "transitions": {"crossfade":{"duration_seconds":0.4}},
+  "palette": {"navy":"#0f2d4d","teal":"#1c8f91","mist":"#eefafa"}
+}

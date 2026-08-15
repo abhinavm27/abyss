@@ -6,7 +6,9 @@ Runs on :8010 by default.
 from __future__ import annotations
 
 import io
+import os
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket
@@ -14,6 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from abyss.agent import explain
 from abyss.hermes_client import HermesError
+from abyss.domain import ConsentAction, DecisionFact, VerificationStatus
+from abyss.journey import CareJourney
 
 from . import auth, db, retrieval
 from .ingest import sbc
@@ -21,6 +25,12 @@ from .estimator import Plan, estimate
 from .ws import voice_endpoint
 
 app = FastAPI(title="ABYSS", version="0.1.0")
+
+# The journey store is intentionally process-local for the sandbox demo. A
+# production deployment would persist the same events and receipts in the
+# application database; it must never silently turn a sandbox receipt into a
+# production action.
+_journeys: dict[str, CareJourney] = {}
 
 
 @app.websocket("/ws")
@@ -31,7 +41,9 @@ async def voice(ws: WebSocket):
 # capacitor://localhost, which is a distinct origin.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "capacitor://localhost", "http://localhost"],
+    allow_origins=[origin for origin in os.getenv(
+        "ABYSS_CORS_ORIGINS", "http://localhost:5173,capacitor://localhost,http://localhost"
+    ).split(",") if origin],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -67,6 +79,178 @@ def require_user(user_id: int | None = Depends(optional_user)) -> int:
 class AgentChatIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     evidence: dict = Field(default_factory=dict)
+
+
+class JourneyStartIn(BaseModel):
+    procedure: str = Field(default="MRI knee without contrast", min_length=1)
+    provider: str = Field(default="Dr. Lee", min_length=1)
+    facility: str = Field(default="Seattle General", min_length=1)
+
+
+class JourneyOnboardIn(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
+    source: str = Field(default="user_request", min_length=1, max_length=200)
+
+
+class JourneyConsentIn(BaseModel):
+    action: ConsentAction
+    scope: str = Field(min_length=1, max_length=500)
+    approved: bool
+
+
+class JourneyActionIn(BaseModel):
+    action: ConsentAction
+    scope: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    new_effective_date: str | None = None
+    first_premium_confirmed: bool = False
+
+
+def _journey_payload(journey: CareJourney) -> dict:
+    return {
+        "journey_id": journey.journey_id,
+        "stage": journey.stage.value,
+        "onboarding_missing": list(journey.onboarding_missing),
+        "onboarding_questions": list(journey.onboarding_questions),
+        "procedure_resolution": ({"code": journey.procedure_resolution.code,
+                                  "canonical_name": journey.procedure_resolution.canonical_name,
+                                  "confidence": journey.procedure_resolution.confidence,
+                                  "candidates": list(journey.procedure_resolution.candidates),
+                                  "needs_confirmation": journey.procedure_resolution.needs_confirmation}
+                                 if journey.procedure_resolution else None),
+        "evaluations": [
+            {"plan_id": item.plan_id, "plan_name": item.plan_name, "feasible": item.feasible,
+             "annual_total": item.annual_total, "annual_premium": item.annual_premium,
+             "hard_failures": list(item.hard_failures)} for item in journey.evaluations
+        ],
+        "receipts": [
+            {"action": receipt.action, "status": receipt.status, "sandbox": receipt.sandbox,
+             "scope": receipt.consent_scope, "idempotency_key": receipt.idempotency_key,
+             "recorded_at": receipt.recorded_at.isoformat()} for receipt in journey.receipts
+        ],
+        "events": [
+            {"sequence": event.sequence, "type": event.event_type, "actor": event.actor,
+             "payload": event.payload, "recorded_at": event.recorded_at.isoformat()}
+            for event in journey.audit.for_journey(journey.journey_id)
+        ],
+    }
+
+
+@app.post("/api/journeys")
+def start_journey(body: JourneyStartIn, user_id: int = Depends(require_user)):
+    journey_id = f"journey-{uuid.uuid4().hex[:12]}"
+    journey = CareJourney.open(journey_id, user_id=str(user_id))
+    now = datetime.now(timezone.utc)
+    for name, value in (("requested_procedure", body.procedure), ("preferred_provider", body.provider),
+                        ("preferred_facility", body.facility)):
+        journey.record_fact(DecisionFact(name, value, "user_request", now, 1.0, VerificationStatus.SOURCE_BACKED))
+    _journeys[journey_id] = journey
+    return _journey_payload(journey)
+
+
+@app.get("/api/journeys/{journey_id}")
+def get_journey(journey_id: str, user_id: int = Depends(require_user)):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    return _journey_payload(journey)
+
+
+@app.get("/api/admin/journeys")
+def admin_journeys(user_id: int = Depends(require_user)):
+    """Synthetic operations view for the hackathon admin console."""
+    return {"journeys": [_journey_payload(journey) for journey in _journeys.values()]}
+
+
+@app.post("/api/journeys/{journey_id}/onboard")
+def onboard_journey(journey_id: str, body: JourneyOnboardIn, user_id: int = Depends(require_user)):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        journey.onboard(body.text, source=body.source)
+    except HermesError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_payload(journey)
+
+
+@app.post("/api/journeys/{journey_id}/consents")
+def consent_journey(journey_id: str, body: JourneyConsentIn, user_id: int = Depends(require_user)):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    journey.record_consent(body.action, approved=body.approved, scope=body.scope, actor=f"user:{user_id}")
+    if body.action == ConsentAction.PROCESS_DOCUMENTS and body.approved and journey.stage.value == "intake":
+        journey.advance()
+    return _journey_payload(journey)
+
+
+@app.post("/api/journeys/{journey_id}/compare")
+def compare_journey(journey_id: str, user_id: int = Depends(require_user)):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        journey.compare(["continuation", "wa-plan-a", "wa-plan-b"])
+        journey.advance()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_payload(journey)
+
+
+@app.post("/api/journeys/{journey_id}/advance")
+def advance_journey(journey_id: str, user_id: int = Depends(require_user)):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        journey.advance()
+    except (RuntimeError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_payload(journey)
+
+
+class JourneyReasonIn(BaseModel):
+    question: str = Field(default="Why did these care paths pass or fail?", min_length=1, max_length=500)
+
+
+@app.post("/api/journeys/{journey_id}/matching-reason")
+def matching_reason(journey_id: str, body: JourneyReasonIn, user_id: int = Depends(require_user)):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        reason = journey.explain_matching(body.question)
+    except HermesError as exc:
+        # The deterministic comparison remains available when Hermes is down.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"reason": reason, "journey": _journey_payload(journey)}
+
+
+@app.post("/api/journeys/{journey_id}/actions")
+def action_journey(journey_id: str, body: JourneyActionIn, user_id: int = Depends(require_user)):
+    journey = _journeys.get(journey_id)
+    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        if body.action == ConsentAction.TRANSITION_COVERAGE:
+            if body.new_effective_date:
+                journey.record_fact(DecisionFact("new_effective_date", body.new_effective_date,
+                                                  "sandbox-enrollment-receipt", datetime.now(timezone.utc), 1.0,
+                                                  VerificationStatus.VERIFIED))
+            if body.first_premium_confirmed:
+                journey.record_fact(DecisionFact("first_premium_confirmed", True,
+                                                  "sandbox-enrollment-receipt", datetime.now(timezone.utc), 1.0,
+                                                  VerificationStatus.VERIFIED))
+        receipt = journey.execute(body.action, body.scope, body.idempotency_key)
+        journey.advance()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_payload(journey)
 
 
 @app.post("/api/agent/chat")

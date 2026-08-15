@@ -247,6 +247,37 @@ export interface PlanComparison {
   message?: string;
 }
 
+export interface CareJourneySnapshot {
+  journey_id: string;
+  stage: string;
+  onboarding_missing: string[];
+  onboarding_questions: string[];
+  procedure_resolution: { code: string | null; canonical_name: string | null; confidence: string; candidates: string[]; needs_confirmation: boolean } | null;
+  evaluations: {
+    plan_id: string;
+    plan_name: string;
+    feasible: boolean;
+    annual_total: number;
+    annual_premium: number;
+    hard_failures: string[];
+  }[];
+  receipts: {
+    action: string;
+    status: string;
+    sandbox: boolean;
+    scope: string;
+    idempotency_key: string;
+    recorded_at: string;
+  }[];
+  events: {
+    sequence: number;
+    type: string;
+    actor: string;
+    payload: Record<string, unknown>;
+    recorded_at: string;
+  }[];
+}
+
 /** A question that has already been asked, offered again on the home screen. */
 export interface RecentLookup {
   query: string;
@@ -417,6 +448,47 @@ export const api = {
     req<{ reply: string }>("/api/agent/chat", {
       method: "POST",
       body: JSON.stringify({ question, evidence }),
+    }),
+
+  startJourney: (body?: { procedure?: string; provider?: string; facility?: string }) =>
+    req<CareJourneySnapshot>("/api/journeys", {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+
+  journey: (journeyId: string) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}`),
+
+  adminJourneys: () => req<{ journeys: CareJourneySnapshot[] }>("/api/admin/journeys"),
+
+  journeyOnboard: (journeyId: string, text: string, source = "user_request") =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/onboard`, {
+      method: "POST",
+      body: JSON.stringify({ text, source }),
+    }),
+
+  journeyConsent: (journeyId: string, body: { action: string; scope: string; approved: boolean }) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/consents`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  journeyCompare: (journeyId: string) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/compare`, { method: "POST" }),
+
+  journeyMatchingReason: (journeyId: string, question?: string) =>
+    req<{ reason: string; journey: CareJourneySnapshot }>(`/api/journeys/${encodeURIComponent(journeyId)}/matching-reason`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
+
+  journeyAdvance: (journeyId: string) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/advance`, { method: "POST" }),
+
+  journeyAction: (journeyId: string, body: { action: string; scope: string; idempotency_key: string; new_effective_date?: string; first_premium_confirmed?: boolean }) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/actions`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 
   providers: (code: string) =>

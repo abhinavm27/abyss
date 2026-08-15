@@ -90,7 +90,8 @@ class CareState:
         self.consents.append(record)
         return record
 
-    def has_consent(self, action: ConsentAction) -> bool:
+    def has_consent(self, action: ConsentAction, scope: str | None = None) -> bool:
         matching = [record for record in self.consents if record.action == action]
-        return bool(matching and matching[-1].approved)
-
+        if not matching or not matching[-1].approved:
+            return False
+        return scope is None or matching[-1].scope == scope
