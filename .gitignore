@@ -11,6 +11,7 @@ dist/
 build/
 apps/web/node_modules/
 apps/web/dist/
+*.tsbuildinfo
 services/api/.venv/
 services/api/*.db
 *.egg-info/

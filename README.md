@@ -33,6 +33,17 @@ The demonstration includes branching logic and safe recovery:
 8. Sandboxed adapters execute enrollment, coverage transition, provider verification, and appointment booking in the permitted sequence.
 9. VELA displays receipts and an audit history that prove what happened.
 
+## VELA interface
+
+The React application contains two purpose built responsive compositions backed by the same journey state:
+
+- **Website:** a cinematic desktop workspace with persistent navigation, a central voice orb, visible agent activity, branching care paths, a verified recommendation, exact consent, and action receipts.
+- **iPhone app:** a native touch composition with camera and PDF intake, fixed mobile navigation, stacked decision cards, safe area handling, and the same consent controlled journey.
+
+The neural care map begins dormant. Each validated agent handoff reveals more nodes and branches. Once deterministic evaluation selects a feasible route, one cyan path illuminates through the network and remains visible through approval and booking.
+
+The public interface defaults to a synthetic interactive journey. Set `VITE_LIVE_MODE=true` only with the authenticated FastAPI service available. Camera capture uses Capacitor on iOS and the browser file picker on the web; PDF and image uploads reuse the existing ingestion APIs.
+
 ## Controlled demo scenario
 
 The golden path follows a fictional Washington resident who recently lost employer coverage and needs a nonemergency knee MRI. VELA compares continuation coverage with two eligible Washington alternatives, preserves a required medication and preferred physician, selects the lowest expected annual cost feasible path, and completes a sandbox appointment booking.
