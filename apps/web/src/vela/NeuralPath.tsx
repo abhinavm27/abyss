@@ -108,31 +108,59 @@ export function NeuralPath({ progress, energy = 0, resolved = false, className =
         context.fill();
       });
 
-      const lanes = [-0.25, -0.13, 0, 0.14, 0.27];
-      lanes.forEach((offset, lane) => {
+      const lanes = [-1, -.52, 0, .55, 1];
+      const routePoint = (lane: number, t: number) => {
+        const y = height * (1.03 - t * .91);
+        const fork = Math.sin(Math.PI * Math.min(1, t * 1.18));
+        const drift = lane * width * (.055 + fork * .24);
+        const bend = Math.sin(t * 8.2 + lane * 1.7) * width * (.009 + Math.abs(lane) * .012);
+        return { x: pathX(y) + drift + bend, y };
+      };
+      const traceRoute = (lane: number, limit: number) => {
         context.beginPath();
-        for (let step = 0; step <= 70; step += 1) {
-          const t = step / 70;
-          const y = height * (0.14 + t * 0.92);
-          const spread = width * (0.4 - t * 0.34);
-          const x = pathX(y) + offset * spread + Math.sin(t * 9 + lane) * width * 0.01;
-          if (step === 0) context.moveTo(x, y);
-          else context.lineTo(x, y);
+        const steps = Math.max(1, Math.floor(80 * limit));
+        for (let step = 0; step <= steps; step += 1) {
+          const point = routePoint(lane, step / 80);
+          if (step === 0) context.moveTo(point.x, point.y);
+          else context.lineTo(point.x, point.y);
         }
-        const thresholds = [0.12, 0.28, 0.06, 0.42, 0.58];
-        const laneActive = active >= thresholds[lane];
-        const winningLane = lane === 2 && resolvedRef.current;
-        context.strokeStyle = winningLane
-          ? "rgba(95, 224, 247, 0.93)"
-          : resolvedRef.current
-            ? "rgba(122, 143, 170, 0.045)"
-            : laneActive
-            ? lane % 2 === 0 ? "rgba(89, 201, 245, 0.36)" : "rgba(137, 112, 255, 0.28)"
-            : "rgba(122, 143, 170, 0.035)";
-        context.lineWidth = winningLane ? 3.4 + voiceEnergy * 2.2 : laneActive && !resolvedRef.current ? 1.25 + voiceEnergy * 0.8 : 0.55;
-        context.shadowColor = winningLane ? "rgba(63, 205, 247, 0.75)" : "transparent";
-        context.shadowBlur = winningLane ? 18 : 0;
+      };
+
+      lanes.forEach((laneOffset) => {
+        traceRoute(laneOffset, 1);
+        context.strokeStyle = resolvedRef.current ? "rgba(117,139,166,.035)" : "rgba(105,132,165,.075)";
+        context.lineWidth = laneOffset === 0 ? 1 : .7;
+        context.setLineDash(Math.abs(laneOffset) === 1 ? [3, 5] : []);
         context.stroke();
+      });
+      context.setLineDash([]);
+
+      lanes.forEach((laneOffset, lane) => {
+        const thresholds = [.18, .31, .05, .43, .56];
+        const laneReveal = Math.max(0, Math.min(1, (active - thresholds[lane]) / (1 - thresholds[lane])));
+        const winningLane = laneOffset === 0 && resolvedRef.current;
+        if (!winningLane && (laneReveal <= 0 || resolvedRef.current)) return;
+        traceRoute(laneOffset, winningLane ? 1 : laneReveal);
+        context.strokeStyle = winningLane
+          ? "rgba(74, 220, 244, .98)"
+          : lane % 2 === 0 ? "rgba(91,193,237,.46)" : "rgba(145,119,248,.38)";
+        context.lineWidth = winningLane ? 4.2 + voiceEnergy * 2.2 : 1.35 + voiceEnergy * .75;
+        context.shadowColor = winningLane ? "rgba(57,205,244,.9)" : "rgba(98,180,230,.22)";
+        context.shadowBlur = winningLane ? 22 : 5;
+        context.stroke();
+
+        const nodeCount = winningLane ? 8 : Math.floor(laneReveal * 5);
+        for (let node = 1; node <= nodeCount; node += 1) {
+          const t = node / (nodeCount + 1) * (winningLane ? 1 : laneReveal);
+          const point = routePoint(laneOffset, t);
+          context.beginPath();
+          context.arc(point.x, point.y, winningLane ? 3.2 : 2.1, 0, Math.PI * 2);
+          context.fillStyle = "rgba(242,254,255,.96)";
+          context.strokeStyle = winningLane ? "rgba(41,183,196,.95)" : "rgba(106,143,220,.62)";
+          context.lineWidth = 1.2;
+          context.fill();
+          context.stroke();
+        }
       });
       context.shadowBlur = 0;
 

@@ -3,7 +3,6 @@ import {
   CalendarDays,
   Camera,
   Check,
-  ChevronRight,
   CircleEllipsis,
   FileText,
   Home,
@@ -169,18 +168,6 @@ type DocumentPromptProps = {
   busy: boolean;
 };
 
-function DocumentPrompt({ onCamera, onUpload, busy }: DocumentPromptProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  return (
-    <section className="vela-document-card" aria-label="Add coverage documents">
-      <button onClick={onCamera} disabled={busy}><Camera /><span>Scan with camera</span><ChevronRight /></button>
-      <button onClick={() => inputRef.current?.click()} disabled={busy}><Upload /><span>Upload documents</span><ChevronRight /></button>
-      <input ref={inputRef} type="file" accept="image/*,.pdf,application/pdf" multiple hidden onChange={(event) => onUpload(event.target.files)} />
-      <small>{busy ? "Reading your coverage…" : "Insurance cards, SBCs, and PDFs are supported."}</small>
-    </section>
-  );
-}
-
 function AgentPanel({ activeCount }: { activeCount: number }) {
   return (
     <section className="vela-agent-panel">
@@ -281,6 +268,7 @@ export function VelaExperience() {
   const [chatBusy, setChatBusy] = useState(false);
   const [chatStarted, setChatStarted] = useState(false);
   const [chatVisualProgress, setChatVisualProgress] = useState(0);
+  const [voiceStarted, setVoiceStarted] = useState(false);
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([{ role: "assistant", text: "Where do you need to go from here? Tell me what care you need and I’ll ask only what changes the recommendation." }]);
   const [documents, setDocuments] = useState<VelaDocument[]>([
     { id: "demo-sbc", name: "Current Plan SBC.pdf", kind: "Summary of Benefits", status: "Verified", added: "Aug 15" },
@@ -325,6 +313,7 @@ export function VelaExperience() {
     setNotice(null);
     setChatStarted(false);
     setChatVisualProgress(0);
+    setVoiceStarted(false);
   };
 
   const begin = async () => {
@@ -332,6 +321,7 @@ export function VelaExperience() {
     try {
       if (liveMode) await voice.connect();
       else await demoMic.start();
+      setVoiceStarted(true);
       setScene("documents");
     } catch (error) {
       setNotice(error instanceof Error && error.name === "NotAllowedError" ? "Microphone access was denied. You can continue by chat instead." : "Microphone unavailable. You can continue by chat instead.");
@@ -436,8 +426,8 @@ export function VelaExperience() {
     <div className={`vela-shell ${mobile ? "is-mobile" : "is-desktop"}`}>
       {!mobile && <Sidebar scene={scene} tab={tab} onTab={setTab} onReset={reset} />}
       {mobile && <MobileHeader onReset={reset} />}
-      {tab === "home" ? <main className={`vela-stage scene-${scene} ${inputMode === "chat" ? "is-chat-mode" : ""}`}>
-          <NeuralPath className={inputMode === "chat" && !chatStarted ? "is-hidden" : ""} progress={inputMode === "chat" ? Math.max(chatVisualProgress, chatStarted ? progress : 0, voiceLevel * .55) : Math.max(progress, voiceLevel * .55)} energy={voiceLevel} resolved={resolved} />
+      {tab === "home" ? <main className={`vela-stage scene-${scene} is-neural-mode ${inputMode === "chat" ? "is-chat-mode" : "is-call-mode"}`}>
+          <NeuralPath className={(inputMode === "chat" ? !chatStarted : !voiceStarted) ? "is-hidden" : ""} progress={inputMode === "chat" ? Math.max(chatVisualProgress, chatStarted ? progress : 0, voiceLevel * .55) : voiceStarted ? Math.max(progress, voiceLevel * .55) : 0} energy={voiceLevel} resolved={resolved} />
           <div className="vela-stage-content">
             <div className="vela-mode-switch"><button type="button" className={inputMode === "voice" ? "is-active" : ""} onClick={() => setInputMode("voice")}><Phone />Call</button><button type="button" className={inputMode === "chat" ? "is-active" : ""} onClick={() => setInputMode("chat")}><MessageCircle />Chat</button></div>
             <p className="vela-eyebrow">{inputMode === "chat" && chatStarted ? "VELA care network" : copy.eyebrow}</p>
@@ -446,7 +436,6 @@ export function VelaExperience() {
             {inputMode === "chat" && <ChatPanel turns={chatTurns} value={chatValue} busy={chatBusy} onValue={setChatValue} onSend={sendChat} />}
 
             {scene === "listening" && inputMode === "voice" && <div className="vela-start"><p>Tell VELA what care you need, or begin with the guided demo.</p><button onClick={() => void begin()}>{(liveMode ? voice.isActive : demoMic.active) ? <><Mic />Listening now</> : <><Mic />Start a care request</>}</button></div>}
-            {scene === "documents" && inputMode === "voice" && <><p className="vela-prompt">Scan your insurance card or upload a plan document so I can understand your benefits.</p><DocumentPrompt onCamera={() => { setTab("documents"); setCameraOpen(true); }} onUpload={handleFiles} busy={busy} /></>}
             {["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
             {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
             {scene === "recommendation" && <RecommendationCard onContinue={() => setScene("consent")} onExplain={() => setNotice("VELA compared annual cost, network status, medication coverage, physician preference, and appointment availability. Deterministic rules selected the feasible path; Nemotron explained the evidence.")} />}
@@ -454,7 +443,7 @@ export function VelaExperience() {
             {scene === "booking" && <AgentPanel activeCount={4} />}
             {scene === "complete" && <CompleteCard onReset={reset} />}
           </div>
-          {inputMode === "chat" && chatStarted && scene === "documents" && <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleFiles([file]))} onUpload={handleFiles} />}
+          {((inputMode === "chat" && chatStarted) || (inputMode === "voice" && voiceStarted)) && scene === "documents" && <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleFiles([file]))} onUpload={handleFiles} />}
           {notice && <div className="vela-notice"><span>{notice}</span><button onClick={() => setNotice(null)} aria-label="Close"><X /></button></div>}
         </main> : <main className="vela-stage vela-tab-stage">
           {tab === "paths" && <PathsTab />}

@@ -430,8 +430,10 @@ button { color: inherit; }
 .vela-preference-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }.vela-preference-grid article { padding: 18px; border: 1px solid rgba(28,53,84,.1); border-radius: 16px; background: rgba(255,255,255,.7); }.vela-pref-title { display: grid; grid-template-columns: 35px 1fr auto; align-items: center; gap: 10px; }.vela-pref-title > svg { width: 21px; color: #1d78bb; }.vela-pref-title h2 { margin: 0 0 3px; font-size: 11px; }.vela-pref-title p { margin: 0; color: #7a8799; font-size: 8px; }.vela-pref-title > b { color: #1472ba; font: 400 18px var(--vela-serif); }.vela-preference-grid input[type=range] { width: 100%; margin-top: 18px; accent-color: #1680ca; }.vela-pref-title > button { position: relative; width: 38px; height: 21px; border: 0; border-radius: 100px; background: #dce2e7; }.vela-pref-title > button i { position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.15);transition:.2s}.vela-pref-title > button.is-on{background:#24b596}.vela-pref-title > button.is-on i{left:20px}.vela-pref-title select{padding:7px;border:1px solid rgba(28,53,84,.12);border-radius:8px;color:#34506f;background:#fff;font-size:9px}.vela-pref-title.second{margin-top:15px;padding-top:15px;border-top:1px solid var(--vela-line)}.vela-preferences-saved{display:flex;align-items:center;justify-content:center;gap:6px;margin:18px 0;color:#1b9d82;font-size:9px}.vela-preferences-saved svg{width:12px}
 
 /* Chat is a fixed visual workspace, not a scrolling card. */
-.vela-stage.is-chat-mode .vela-network { bottom: -12%; height: 108%; opacity: 1; transition: opacity .7s ease; }
-.vela-stage.is-chat-mode .vela-network.is-hidden { opacity: 0; }
+.vela-stage.is-neural-mode .vela-network { bottom: -12%; height: 108%; opacity: 1; transition: opacity .7s ease; }
+.vela-stage.is-neural-mode .vela-network.is-hidden { opacity: 0; }
+.vela-stage.is-call-mode .vela-document-card { display: none; }
+.vela-stage.is-call-mode .vela-stage-content { padding-bottom: 112px; }
 .vela-stage.is-chat-mode .vela-stage-content { align-items: flex-start; padding: 46px 5% 118px; text-align: left; }
 .vela-stage.is-chat-mode .vela-mode-switch { margin: 0 0 24px; }
 .vela-stage.is-chat-mode .vela-eyebrow { margin-left: 4px; }
