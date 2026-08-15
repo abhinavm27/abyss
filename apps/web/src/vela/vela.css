@@ -434,6 +434,27 @@ button { color: inherit; }
 .vela-stage.is-neural-mode .vela-network.is-hidden { opacity: 0; }
 .vela-stage.is-call-mode .vela-document-card { display: none; }
 .vela-stage.is-call-mode .vela-stage-content { padding-bottom: 112px; }
+
+.vela-route-map { overflow: visible; }
+.vela-route-map path { fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.vela-route-wash { opacity: calc(.35 + var(--vela-energy, 0) * .55); transition: opacity .35s ease; }
+.vela-route-crosslinks path { stroke: rgba(121,137,193,.16); stroke-width: .85; stroke-dasharray: 2 7; }
+.vela-route-feeders path { stroke: rgba(112,139,188,.1); stroke-width: .65; stroke-dasharray: 1 5; }
+.vela-route-bases path { stroke: rgba(104,128,169,.15); stroke-width: .85; stroke-dasharray: 1.5 5.5; }
+.vela-route-bases path.is-primary { stroke: rgba(80,159,193,.17); stroke-dasharray: none; stroke-width: 1.15; }
+.vela-route-progress path { stroke: url(#vela-route-blue); stroke-width: calc(1.35px + var(--vela-energy, 0) * 1.1px); stroke-dasharray: 1; transition: stroke-dashoffset .8s cubic-bezier(.2,.75,.25,1), opacity .55s ease; filter: drop-shadow(0 0 4px rgba(108,161,230,.22)); }
+.vela-route-progress path.is-primary { stroke: url(#vela-route-cyan); stroke-width: calc(2.2px + var(--vela-energy, 0) * 1.5px); filter: drop-shadow(0 0 7px rgba(76,207,239,.45)); }
+.vela-route-map.is-resolved .vela-route-bases path:not(.is-primary), .vela-route-map.is-resolved .vela-route-crosslinks { opacity: .32; }
+.vela-route-map.is-resolved .vela-route-progress path.is-primary { stroke-width: 4.5px; filter: url(#vela-route-glow); animation: vela-route-breathe 2.2s ease-in-out infinite; }
+.vela-route-nodes circle { fill: rgba(250,254,255,.96); stroke: rgba(113,133,224,.55); stroke-width: 1.3; transition: opacity .5s ease; filter: url(#vela-node-glow); }
+.vela-route-dust circle { fill: rgba(116,143,225,.24); filter: url(#vela-node-glow); }
+.vela-route-map.is-resolved .vela-route-nodes circle { stroke: rgba(64,196,190,.8); }
+.vela-route-traveler circle { fill: #eaffff; stroke: #45d4ee; stroke-width: 1.5; filter: url(#vela-node-glow); }
+.vela-route-destination > circle:first-child { fill: rgba(39,187,159,.12); stroke: rgba(39,187,159,.28); stroke-width: 1; animation: vela-destination-pulse 1.8s ease-out infinite; }
+.vela-route-destination > circle:nth-child(2) { fill: #2bb99e; filter: url(#vela-node-glow); }
+.vela-route-destination path { stroke: white; stroke-width: 2; }
+@keyframes vela-route-breathe { 50% { opacity: .76; stroke-width: 6px; } }
+@keyframes vela-destination-pulse { 50% { transform: scale(1.35); opacity: .45; } }
 .vela-stage.is-chat-mode .vela-stage-content { align-items: flex-start; padding: 46px 5% 118px; text-align: left; }
 .vela-stage.is-chat-mode .vela-mode-switch { margin: 0 0 24px; }
 .vela-stage.is-chat-mode .vela-eyebrow { margin-left: 4px; }
