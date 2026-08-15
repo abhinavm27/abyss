@@ -88,8 +88,40 @@ class CareJourney:
         """
         if self.stage != WorkflowStage.INTAKE:
             raise RuntimeError("onboarding is only available in intake stage")
-        proposal = self.onboarding_agent.extract(text, source=source)
+        existing_facts = {
+            name: {"value": fact.value, "verification_status": fact.verification_status.value}
+            for name, fact in self.workflow.care_state.facts.items()
+        }
+        proposal = self.onboarding_agent.extract(
+            text,
+            source=source,
+            context={
+                "existing_facts": existing_facts,
+                "pending_fields": list(self.onboarding_missing),
+                "pending_questions": list(self.onboarding_questions),
+            },
+        )
+        existing_procedure = self.workflow.care_state.facts.get("requested_procedure")
+        procedure_phrase = str(existing_procedure.value) if existing_procedure else ""
         for fact in proposal.facts:
+            if fact.name == "requested_procedure" and existing_procedure is not None:
+                # Preserve explicit information across turns. The model proposes
+                # the merge; the source-backed catalog validates it before the
+                # fact ledger replaces the previous procedure value.
+                procedure_phrase = (
+                    f"{existing_procedure.value} {fact.value} {text.strip()}"
+                )
+                merged_resolution = self.knowledge_agent.propose_procedure(
+                    procedure_phrase
+                )
+                merged_value = (
+                    merged_resolution.canonical_name
+                    if not merged_resolution.needs_confirmation
+                    else f"{existing_procedure.value}; {fact.value}"
+                )
+                fact = replace(fact, value=merged_value)
+            elif fact.name == "requested_procedure":
+                procedure_phrase = f"{fact.value} {text.strip()}"
             self.record_fact(fact)
         procedure_fact = self.workflow.care_state.facts.get("requested_procedure")
         procedure = procedure_fact.value if procedure_fact else None
@@ -101,10 +133,8 @@ class CareJourney:
                 confirmed_code = "73721"
             elif "with contrast" in normalized:
                 confirmed_code = "73722"
-            proposed_procedure_in_reply = any(
-                fact.name == "requested_procedure" for fact in proposal.facts
-            )
-            procedure_phrase = text if proposed_procedure_in_reply else str(procedure)
+            if not procedure_phrase:
+                procedure_phrase = str(procedure)
             self.procedure_resolution = self.knowledge_agent.propose_procedure(
                 procedure_phrase, confirmed_code=confirmed_code
             )

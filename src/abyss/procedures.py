@@ -30,13 +30,18 @@ class ProcedureCatalog:
 
     def resolve(self, phrase: str, *, confirmed_code: str | None = None) -> ProcedureResolution:
         normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", phrase.lower()).split())
+        tokens = set(normalized.split())
         if confirmed_code in self._records:
             return ProcedureResolution(confirmed_code, self._records[confirmed_code], "confirmed")
         if normalized in {
             "abdominal ultrasound complete", "complete abdominal ultrasound",
             "ultrasound abdomen complete", "complete ultrasound abdomen",
             "us exam abdomen complete", "us exam abdom complete",
-        }:
+        } or (
+            "ultrasound" in tokens
+            and "complete" in tokens
+            and bool({"abdomen", "abdominal"} & tokens)
+        ):
             return ProcedureResolution("76700", self._records["76700"], "source_backed")
         if normalized in {"73721", "mri knee without contrast", "knee mri without contrast", "mri knee no contrast"}:
             return ProcedureResolution("73721", self._records["73721"], "source_backed")

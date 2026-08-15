@@ -33,8 +33,12 @@ class OnboardingAgent:
     def __init__(self, client: HermesClient | ChatModel | None = None) -> None:
         self.client = client
 
-    def extract(self, text: str, *, source: str) -> FactProposal:
-        facts = extract_facts(text, source=source, client=self.client)  # type: ignore[arg-type]
+    def extract(
+        self, text: str, *, source: str, context: dict[str, Any] | None = None
+    ) -> FactProposal:
+        facts = extract_facts(
+            text, source=source, context=context, client=self.client
+        )  # type: ignore[arg-type]
         names = {fact.name for fact in facts}
         required = {
             "requested_procedure": "What care or procedure are you trying to arrange?",

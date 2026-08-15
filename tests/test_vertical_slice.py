@@ -262,6 +262,35 @@ class VerticalSliceTests(TestCase):
         )
         self.assertNotIn("procedure_code_confirmation", journey.onboarding_missing)
 
+    def test_onboarding_merges_procedure_fragments_across_turns(self) -> None:
+        class SequencedModel:
+            def __init__(self):
+                self.responses = iter([
+                    '{"facts":[{"name":"requested_procedure","value":"ultrasound scan","confidence":0.9}]}',
+                    '{"facts":[{"name":"requested_procedure","value":"abdomen","confidence":0.7},'
+                    '{"name":"service_date","value":"aug 25","confidence":0.95},'
+                    '{"name":"coverage_end_date","value":"sept 30","confidence":0.95}]}',
+                ])
+
+            def chat(self, messages, **kwargs):
+                return next(self.responses)
+
+        journey = CareJourney.open(
+            "journey-fragment-merge",
+            onboarding_agent=OnboardingAgent(SequencedModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("do an ultrasound scan", source="user_request")
+        journey.onboard(
+            "aug 25, sept 30, abdomen complete", source="user_request"
+        )
+        facts = journey.workflow.care_state.facts
+        self.assertEqual(facts["requested_procedure"].value, "Complete abdominal ultrasound")
+        self.assertEqual(facts["procedure_code"].value, "76700")
+        self.assertEqual(facts["service_date"].value, "aug 25")
+        self.assertEqual(facts["coverage_end_date"].value, "sept 30")
+        self.assertEqual(journey.onboarding_missing, ())
+
     def test_onboarding_accumulates_facts_and_routes_confirmation_through_knowledge(self) -> None:
         class SequencedModel:
             def __init__(self):
