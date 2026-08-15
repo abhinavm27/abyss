@@ -80,6 +80,7 @@ export function NeuralPath({ progress, energy = 0, resolved = false, className =
         <g className="vela-route-feeders">{feederPaths.map((path) => <path d={path} key={path} />)}</g>
         <g className="vela-route-crosslinks">{crossLinks.map((path) => <path d={path} key={path} />)}</g>
         <g className="vela-route-bases">{routes.map((path, index) => <path className={index === 0 ? "is-primary" : ""} d={path} key={path} pathLength="1" />)}</g>
+        {resolved && <g className="vela-route-winner-halo"><path d={routes[0]} pathLength="1" /></g>}
 
         <g className="vela-route-progress">
           {routes.map((path, index) => {
