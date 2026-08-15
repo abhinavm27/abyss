@@ -37,12 +37,13 @@ The demonstration includes branching logic and safe recovery:
 
 The React application contains two purpose built responsive compositions backed by the same journey state:
 
-- **Website:** a cinematic desktop workspace with persistent navigation, a central voice orb, visible agent activity, branching care paths, a verified recommendation, exact consent, and action receipts.
-- **iPhone app:** a native touch composition with camera and PDF intake, fixed mobile navigation, stacked decision cards, safe area handling, and the same consent controlled journey.
+- **Website:** a cinematic desktop workspace with persistent navigation, voice or text chat, live agent activity, branching care paths, a verified recommendation, exact consent, and action receipts.
+- **iPhone app:** a native touch composition with live camera and PDF intake, fixed mobile navigation, stacked decision cards, safe area handling, and the same consent controlled journey.
+- **Complete workspace:** Paths, Appointments, Documents, and Preferences are functional responsive screens backed by the existing API contracts, with a synthetic fallback for the public demo.
 
 The neural care map begins dormant. Each validated agent handoff reveals more nodes and branches. Once deterministic evaluation selects a feasible route, one cyan path illuminates through the network and remains visible through approval and booking.
 
-The public interface defaults to a synthetic interactive journey. Set `VITE_LIVE_MODE=true` only with the authenticated FastAPI service available. Camera capture uses Capacitor on iOS and the browser file picker on the web; PDF and image uploads reuse the existing ingestion APIs.
+The public interface defaults to a synthetic interactive journey. Set `VITE_LIVE_MODE=true` only with the authenticated FastAPI service available. Camera capture uses Capacitor on iOS and `getUserMedia` in supported browsers; PDF and image uploads reuse the existing ingestion APIs.
 
 ## Controlled demo scenario
 

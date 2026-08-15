@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 type Props = {
   progress: number;
+  energy?: number;
   resolved?: boolean;
   className?: string;
 };
@@ -13,15 +14,17 @@ function seeded(index: number) {
   return value - Math.floor(value);
 }
 
-export function NeuralPath({ progress, resolved = false, className = "" }: Props) {
+export function NeuralPath({ progress, energy = 0, resolved = false, className = "" }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const progressRef = useRef(progress);
   const resolvedRef = useRef(resolved);
+  const energyRef = useRef(energy);
 
   useEffect(() => {
     progressRef.current = progress;
     resolvedRef.current = resolved;
-  }, [progress, resolved]);
+    energyRef.current = energy;
+  }, [progress, energy, resolved]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -67,6 +70,7 @@ export function NeuralPath({ progress, resolved = false, className = "" }: Props
       frame += 1;
       context.clearRect(0, 0, width, height);
       const active = Math.max(0, Math.min(1, progressRef.current));
+      const voiceEnergy = Math.max(0, Math.min(1, energyRef.current));
       const time = frame / 75;
 
       const wash = context.createRadialGradient(width * 0.5, height * 0.8, 0, width * 0.5, height * 0.8, width * 0.48);
@@ -93,11 +97,11 @@ export function NeuralPath({ progress, resolved = false, className = "" }: Props
         context.lineWidth = reveal ? 0.8 : 0.45;
         context.stroke();
 
-        const pulse = reveal ? 1 + Math.sin(time * 2.5 + index) * 0.28 : 0.7;
+        const pulse = reveal ? 1 + Math.sin(time * (2.5 + voiceEnergy * 7) + index) * (0.28 + voiceEnergy * 0.7) : 0.7;
         context.beginPath();
         context.arc(x, y, (1.1 + point.depth * 2.4) * pulse, 0, Math.PI * 2);
         context.fillStyle = reveal
-          ? `rgba(104, 176, 238, ${0.18 + active * 0.38})`
+          ? `rgba(104, 176, 238, ${0.18 + active * 0.38 + voiceEnergy * 0.22})`
           : "rgba(120, 147, 180, 0.09)";
         context.fill();
       });
@@ -119,7 +123,7 @@ export function NeuralPath({ progress, resolved = false, className = "" }: Props
           : laneActive
             ? lane % 2 === 0 ? "rgba(89, 201, 245, 0.36)" : "rgba(137, 112, 255, 0.28)"
             : "rgba(122, 143, 170, 0.07)";
-        context.lineWidth = lane === 2 && resolvedRef.current ? 3.4 : laneActive ? 1.25 : 0.65;
+        context.lineWidth = lane === 2 && resolvedRef.current ? 3.4 + voiceEnergy * 2.2 : laneActive ? 1.25 + voiceEnergy * 0.8 : 0.65;
         context.shadowColor = lane === 2 && resolvedRef.current ? "rgba(63, 205, 247, 0.75)" : "transparent";
         context.shadowBlur = lane === 2 && resolvedRef.current ? 18 : 0;
         context.stroke();

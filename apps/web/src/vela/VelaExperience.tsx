@@ -9,8 +9,11 @@ import {
   Home,
   LockKeyhole,
   Menu,
+  MessageCircle,
   Mic,
   Network,
+  Phone,
+  Send,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -21,8 +24,11 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken, type CareJourneySnapshot } from "@/lib/api";
-import { captureCard } from "@/lib/cardScan";
+import { useVoiceSession } from "@/hooks/useVoiceSession";
 import { NeuralPath } from "@/vela/NeuralPath";
+import { AppointmentsTab, DocumentsTab, PathsTab, PreferencesTab, type VelaAppointment, type VelaDocument } from "@/vela/VelaTabs";
+
+type AppTab = "home" | "paths" | "appointments" | "documents" | "preferences";
 
 type Scene =
   | "listening"
@@ -83,6 +89,30 @@ function useIsMobile() {
   return mobile;
 }
 
+function useDemoMicrophone() {
+  const [active, setActive] = useState(false);
+  const [level, setLevel] = useState(0);
+  const streamRef = useRef<MediaStream | null>(null);
+  const contextRef = useRef<AudioContext | null>(null);
+  const frameRef = useRef(0);
+  const stop = () => {
+    window.cancelAnimationFrame(frameRef.current);
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    void contextRef.current?.close().catch(() => {});
+    streamRef.current = null; contextRef.current = null; setActive(false); setLevel(0);
+  };
+  const start = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const context = new AudioContext(); const analyser = context.createAnalyser(); analyser.fftSize = 256;
+    context.createMediaStreamSource(stream).connect(analyser); streamRef.current = stream; contextRef.current = context; setActive(true);
+    const values = new Uint8Array(analyser.frequencyBinCount);
+    const read = () => { analyser.getByteFrequencyData(values); const average = values.reduce((sum, value) => sum + value, 0) / values.length / 128; setLevel(Math.min(1, average * 1.9)); frameRef.current = window.requestAnimationFrame(read); };
+    read();
+  };
+  useEffect(() => stop, []);
+  return { active, level, start, stop };
+}
+
 function Logo() {
   return <span className="vela-logo" aria-label="VELA">VELA</span>;
 }
@@ -100,16 +130,16 @@ function Waveform() {
   return <div className="vela-wave" aria-hidden>{Array.from({ length: 56 }, (_, index) => <i key={index} style={{ "--h": `${3 + ((index * 7) % 18)}px` } as React.CSSProperties} />)}</div>;
 }
 
-function Sidebar({ scene, onReset }: { scene: Scene; onReset: () => void }) {
+function Sidebar({ scene, tab, onTab, onReset }: { scene: Scene; tab: AppTab; onTab: (tab: AppTab) => void; onReset: () => void }) {
   return (
     <aside className="vela-sidebar">
       <Logo />
       <nav aria-label="Primary">
-        <button className="is-current" onClick={onReset}><Home />Home</button>
-        <button className={scene === "recommendation" ? "has-update" : ""}><Network />Paths</button>
-        <button className={scene === "complete" ? "has-update" : ""}><CalendarDays />Appointments</button>
-        <button><FileText />Documents</button>
-        <button><Settings />Preferences</button>
+        <button className={tab === "home" ? "is-current" : ""} onClick={() => { onReset(); onTab("home"); }}><Home />Home</button>
+        <button className={`${tab === "paths" ? "is-current" : ""} ${scene === "recommendation" ? "has-update" : ""}`} onClick={() => onTab("paths")}><Network />Paths</button>
+        <button className={`${tab === "appointments" ? "is-current" : ""} ${scene === "complete" ? "has-update" : ""}`} onClick={() => onTab("appointments")}><CalendarDays />Appointments</button>
+        <button className={tab === "documents" ? "is-current" : ""} onClick={() => onTab("documents")}><FileText />Documents</button>
+        <button className={tab === "preferences" ? "is-current" : ""} onClick={() => onTab("preferences")}><Settings />Preferences</button>
       </nav>
       <div className="vela-private"><ShieldCheck /><span>Your data is<br />private and secure</span><i /></div>
     </aside>
@@ -120,14 +150,14 @@ function MobileHeader({ onReset }: { onReset: () => void }) {
   return <header className="vela-mobile-header"><Logo /><button aria-label="Menu" onClick={onReset}><Menu /></button></header>;
 }
 
-function MobileNav({ scene, onReset }: { scene: Scene; onReset: () => void }) {
+function MobileNav({ scene, tab, onTab, onReset }: { scene: Scene; tab: AppTab; onTab: (tab: AppTab) => void; onReset: () => void }) {
   return (
     <nav className="vela-mobile-nav" aria-label="Primary">
-      <button className="is-current" onClick={onReset}><Home /><span>Home</span></button>
-      <button className={scene === "recommendation" ? "has-update" : ""}><Network /><span>Paths</span></button>
-      <button className={scene === "complete" ? "has-update" : ""}><CalendarDays /><span>Appointments</span></button>
-      <button><FileText /><span>Documents</span></button>
-      <button><CircleEllipsis /><span>More</span></button>
+      <button className={tab === "home" ? "is-current" : ""} onClick={() => { onReset(); onTab("home"); }}><Home /><span>Home</span></button>
+      <button className={`${tab === "paths" ? "is-current" : ""} ${scene === "recommendation" ? "has-update" : ""}`} onClick={() => onTab("paths")}><Network /><span>Paths</span></button>
+      <button className={`${tab === "appointments" ? "is-current" : ""} ${scene === "complete" ? "has-update" : ""}`} onClick={() => onTab("appointments")}><CalendarDays /><span>Appointments</span></button>
+      <button className={tab === "documents" ? "is-current" : ""} onClick={() => onTab("documents")}><FileText /><span>Documents</span></button>
+      <button className={tab === "preferences" ? "is-current" : ""} onClick={() => onTab("preferences")}><CircleEllipsis /><span>More</span></button>
     </nav>
   );
 }
@@ -224,8 +254,16 @@ function CompleteCard({ onReset }: { onReset: () => void }) {
   );
 }
 
+type ChatTurn = { role: "user" | "assistant"; text: string };
+
+function ChatPanel({ turns, value, busy, onValue, onSend }: { turns: ChatTurn[]; value: string; busy: boolean; onValue: (value: string) => void; onSend: () => void }) {
+  return <section className="vela-chat-panel" aria-label="Chat with VELA"><div className="vela-chat-turns">{turns.map((turn, index) => <div className={`vela-chat-turn is-${turn.role}`} key={`${turn.role}-${index}`}><span>{turn.role === "assistant" ? "VELA" : "You"}</span><p>{turn.text}</p></div>)}{busy && <div className="vela-chat-turn is-assistant is-typing"><span>VELA</span><p><i /><i /><i /></p></div>}</div><form onSubmit={(event) => { event.preventDefault(); onSend(); }}><input value={value} onChange={(event) => onValue(event.target.value)} placeholder="Tell VELA what care you need…" aria-label="Message VELA" /><button disabled={!value.trim() || busy} aria-label="Send message"><Send /></button></form><div className="vela-chat-suggestions"><button onClick={() => onValue("I need a knee MRI and want to understand what it will cost.")}>I need an MRI</button><button onClick={() => onValue("Help me compare my insurance options.")}>Compare coverage</button></div></section>;
+}
+
 export function VelaExperience() {
   const mobile = useIsMobile();
+  const [tab, setTab] = useState<AppTab>("home");
+  const [inputMode, setInputMode] = useState<"voice" | "chat">("voice");
   const [scene, setScene] = useState<Scene>(() => {
     const requested = new URLSearchParams(window.location.search).get("scene") as Scene | null;
     return requested && sceneOrder.includes(requested) ? requested : "listening";
@@ -233,11 +271,25 @@ export function VelaExperience() {
   const [busy, setBusy] = useState(false);
   const [journey, setJourney] = useState<CareJourneySnapshot | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [chatValue, setChatValue] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatTurns, setChatTurns] = useState<ChatTurn[]>([{ role: "assistant", text: "Where do you need to go from here? Tell me what care you need and I’ll ask only what changes the recommendation." }]);
+  const [documents, setDocuments] = useState<VelaDocument[]>([
+    { id: "demo-sbc", name: "Current Plan SBC.pdf", kind: "Summary of Benefits", status: "Verified", added: "Aug 15" },
+    { id: "demo-referral", name: "Knee MRI referral.pdf", kind: "Referral", status: "Verified", added: "Aug 15" },
+  ]);
+  const [appointments, setAppointments] = useState<VelaAppointment[]>([
+    { id: "demo-appointment", title: "Knee MRI without contrast", provider: "Northwest Imaging", date: "Tuesday, September 3", time: "10:30 AM", location: "Seattle, WA", cost: 420, status: "Confirmed" },
+  ]);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const liveMode = import.meta.env.VITE_LIVE_MODE === "true" && Boolean(getToken());
+  const voice = useVoiceSession({ onError: (message) => setNotice(message) });
+  const demoMic = useDemoMicrophone();
   const index = sceneOrder.indexOf(scene);
   const progress = Math.max(0, index / (sceneOrder.length - 1));
   const copy = sceneCopy[scene];
   const resolved = ["recommendation", "consent", "booking", "complete"].includes(scene);
+  const voiceLevel = liveMode ? voice.micLevel : demoMic.level;
   const agentCount = useMemo(() => {
     if (scene === "working") return 2;
     if (["decision", "verifying"].includes(scene)) return 3;
@@ -259,12 +311,40 @@ export function VelaExperience() {
   }, [scene]);
 
   const reset = () => {
+    voice.disconnect(); demoMic.stop();
     setScene("listening");
     setJourney(null);
     setNotice(null);
   };
 
-  const begin = () => setScene("documents");
+  const begin = async () => {
+    if (inputMode === "chat") return;
+    try {
+      if (liveMode) await voice.connect();
+      else await demoMic.start();
+      setScene("documents");
+    } catch (error) {
+      setNotice(error instanceof Error && error.name === "NotAllowedError" ? "Microphone access was denied. You can continue by chat instead." : "Microphone unavailable. You can continue by chat instead.");
+      setInputMode("chat");
+    }
+  };
+
+  const sendChat = async () => {
+    const text = chatValue.trim(); if (!text) return;
+    setChatTurns((turns) => [...turns, { role: "user", text }]); setChatValue(""); setChatBusy(true);
+    try {
+      if (liveMode && voice.isActive) voice.sendText(text);
+      else if (liveMode) {
+        const response = await api.agentChat(text, journey ?? { journey_stage: scene });
+        setChatTurns((turns) => [...turns, { role: "assistant", text: response.reply }]);
+      } else {
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+        setChatTurns((turns) => [...turns, { role: "assistant", text: "I can help with that. First, show me your coverage so I can compare the complete cost instead of guessing from the procedure price alone." }]);
+      }
+      setScene("documents");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "VELA could not send that message."); }
+    finally { setChatBusy(false); }
+  };
 
   const handleFiles = async (files: FileList | File[] | null) => {
     const file = files?.[0];
@@ -272,6 +352,8 @@ export function VelaExperience() {
     setBusy(true);
     setNotice(null);
     try {
+      const newDocument: VelaDocument = { id: crypto.randomUUID(), name: file.name, kind: file.type.includes("pdf") ? "Summary of Benefits" : "Insurance card", status: "Processing", added: "Just now", preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined };
+      setDocuments((items) => [newDocument, ...items]);
       if (liveMode) {
         const started = journey ?? await api.startJourney();
         setJourney(started);
@@ -284,17 +366,14 @@ export function VelaExperience() {
         });
         setJourney(consented);
       }
+      setDocuments((items) => items.map((item) => item.id === newDocument.id ? { ...item, status: "Verified" } : item));
       setScene("understanding");
     } catch (error) {
+      setDocuments((items) => items.map((item) => item.status === "Processing" ? { ...item, status: "Review needed" } : item));
       setNotice(error instanceof Error ? error.message : "VELA could not read that document.");
     } finally {
       setBusy(false);
     }
-  };
-
-  const handleCamera = async () => {
-    const file = await captureCard();
-    if (file) await handleFiles([file]);
   };
 
   const handleDecision = async () => {
@@ -341,38 +420,34 @@ export function VelaExperience() {
 
   return (
     <div className={`vela-shell ${mobile ? "is-mobile" : "is-desktop"}`}>
-      {!mobile && <Sidebar scene={scene} onReset={reset} />}
+      {!mobile && <Sidebar scene={scene} tab={tab} onTab={setTab} onReset={reset} />}
       {mobile && <MobileHeader onReset={reset} />}
-      <main className={`vela-stage scene-${scene}`}>
-        <NeuralPath progress={progress} resolved={resolved} />
-        <div className="vela-stage-content">
-          <p className="vela-eyebrow">{copy.eyebrow}</p>
-          <h1>{copy.title.split("\n").map((line, lineIndex) => <span key={line}>{line}{lineIndex < copy.title.split("\n").length - 1 && <br />}</span>)}</h1>
-          <div className="vela-listener"><Waveform /><VoiceOrb active={scene !== "complete"} /><Waveform /></div>
-          <p className="vela-status">{copy.status}</p>
+      {tab === "home" ? <main className={`vela-stage scene-${scene}`}>
+          <NeuralPath progress={Math.max(progress, voiceLevel * .55)} energy={voiceLevel} resolved={resolved} />
+          <div className="vela-stage-content">
+            <div className="vela-mode-switch"><button className={inputMode === "voice" ? "is-active" : ""} onClick={() => setInputMode("voice")}><Phone />Call</button><button className={inputMode === "chat" ? "is-active" : ""} onClick={() => setInputMode("chat")}><MessageCircle />Chat</button></div>
+            <p className="vela-eyebrow">{copy.eyebrow}</p>
+            <h1>{copy.title.split("\n").map((line, lineIndex) => <span key={line}>{line}{lineIndex < copy.title.split("\n").length - 1 && <br />}</span>)}</h1>
+            {inputMode === "voice" && <><div className="vela-listener" style={{ "--energy": voiceLevel } as React.CSSProperties}><Waveform /><VoiceOrb active={scene !== "complete"} /><Waveform /></div><p className="vela-status">{voiceLevel > .08 ? "I can hear you…" : copy.status}</p></>}
+            {inputMode === "chat" && scene === "listening" && <ChatPanel turns={chatTurns} value={chatValue} busy={chatBusy} onValue={setChatValue} onSend={sendChat} />}
 
-          {scene === "listening" && (
-            <div className="vela-start">
-              <p>Tell VELA what care you need, or begin with the guided demo.</p>
-              <button onClick={begin}><Mic />Start a care request</button>
-            </div>
-          )}
-          {scene === "documents" && (
-            <>
-              <p className="vela-prompt">Scan your insurance card or upload a plan document so I can understand your benefits.</p>
-              <DocumentPrompt onCamera={handleCamera} onUpload={handleFiles} busy={busy} />
-            </>
-          )}
-          {["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
-          {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
-          {scene === "recommendation" && <RecommendationCard onContinue={() => setScene("consent")} onExplain={() => setNotice("VELA compared annual cost, network status, medication coverage, physician preference, and appointment availability. Deterministic rules selected the feasible path; Nemotron explained the evidence.")} />}
-          {scene === "consent" && <ConsentCard onApprove={approve} onBack={() => setScene("recommendation")} />}
-          {scene === "booking" && <AgentPanel activeCount={4} />}
-          {scene === "complete" && <CompleteCard onReset={reset} />}
-        </div>
-        {notice && <div className="vela-notice"><span>{notice}</span><button onClick={() => setNotice(null)} aria-label="Close"><X /></button></div>}
-      </main>
-      {mobile && <MobileNav scene={scene} onReset={reset} />}
+            {scene === "listening" && inputMode === "voice" && <div className="vela-start"><p>Tell VELA what care you need, or begin with the guided demo.</p><button onClick={() => void begin()}>{(liveMode ? voice.isActive : demoMic.active) ? <><Mic />Listening now</> : <><Mic />Start a care request</>}</button></div>}
+            {scene === "documents" && <><p className="vela-prompt">Scan your insurance card or upload a plan document so I can understand your benefits.</p><DocumentPrompt onCamera={() => { setTab("documents"); setCameraOpen(true); }} onUpload={handleFiles} busy={busy} /></>}
+            {["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
+            {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
+            {scene === "recommendation" && <RecommendationCard onContinue={() => setScene("consent")} onExplain={() => setNotice("VELA compared annual cost, network status, medication coverage, physician preference, and appointment availability. Deterministic rules selected the feasible path; Nemotron explained the evidence.")} />}
+            {scene === "consent" && <ConsentCard onApprove={approve} onBack={() => setScene("recommendation")} />}
+            {scene === "booking" && <AgentPanel activeCount={4} />}
+            {scene === "complete" && <CompleteCard onReset={reset} />}
+          </div>
+          {notice && <div className="vela-notice"><span>{notice}</span><button onClick={() => setNotice(null)} aria-label="Close"><X /></button></div>}
+        </main> : <main className="vela-stage vela-tab-stage">
+          {tab === "paths" && <PathsTab />}
+          {tab === "appointments" && <AppointmentsTab items={appointments} onItems={setAppointments} liveMode={liveMode} />}
+          {tab === "documents" && <DocumentsTab documents={documents} onDocuments={setDocuments} liveMode={liveMode} openCamera={cameraOpen} onOpenCamera={setCameraOpen} />}
+          {tab === "preferences" && <PreferencesTab />}
+        </main>}
+      {mobile && <MobileNav scene={scene} tab={tab} onTab={setTab} onReset={reset} />}
     </div>
   );
 }
