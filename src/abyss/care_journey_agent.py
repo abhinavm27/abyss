@@ -7,7 +7,6 @@ choose an insurance plan, calculate costs, grant consent, or execute actions.
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
@@ -43,6 +42,9 @@ class JourneyPlan:
     missing: tuple[str, ...]
     source: str
     confidence: float
+    attempt_count: int = 1
+    normalizations: tuple[str, ...] = ()
+    validation_errors: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
         return {
@@ -57,6 +59,9 @@ class JourneyPlan:
             "missing": list(self.missing),
             "source": self.source,
             "confidence": self.confidence,
+            "attempt_count": self.attempt_count,
+            "normalizations": list(self.normalizations),
+            "validation_errors": list(self.validation_errors),
         }
 
 
@@ -68,7 +73,11 @@ intent must be one of new_care_request, continue_journey,
 reschedule_appointment, journey_status, list_journeys, unknown.
 Use only journey and appointment IDs present in context. Plan read-only or
 permissioned steps; never claim an action was completed, never grant consent,
-never choose coverage, and never provide medical advice."""
+never choose coverage, and never provide medical advice.
+Use JSON null when there is no target ID. steps, reuse, refresh, and missing
+must always be JSON arrays, including when they are empty. A request to book or
+arrange a different kind of care is new_care_request even when another journey
+is active."""
 
 
 class CareJourneyAgent:
@@ -90,29 +99,64 @@ class CareJourneyAgent:
             raise ValueError("a user message is required")
         utterance = utterance_id or f"utterance-{uuid.uuid4().hex[:12]}"
         correlation = correlation_id or f"correlation-{uuid.uuid4().hex[:12]}"
-        try:
-            client = self.client or HermesClient()
-            raw = client.chat([
-                {"role": "system", "content": SUPERVISOR_PROMPT},
-                {"role": "user", "content": json.dumps({
-                    "message": text.strip(),
-                    "active_journey_id": active_journey_id,
-                    "user_care_context": context,
-                }, separators=(",", ":"), default=str)},
-            ], max_tokens=350, temperature=0.0)
-            payload = self._parse(raw)
-            return self._validate(
-                payload, context, utterance, correlation, "hermes", 0.9
-            )
-        except (AgentOutputError, ValueError, TypeError, json.JSONDecodeError):
-            payload = self._fallback(text, context, active_journey_id)
+        client = self.client or HermesClient()
+        messages = [
+            {"role": "system", "content": SUPERVISOR_PROMPT},
+            {"role": "user", "content": json.dumps({
+                "message": text.strip(),
+                "active_journey_id": active_journey_id,
+                "user_care_context": context,
+            }, separators=(",", ":"), default=str)},
+        ]
+        errors: list[str] = []
+        all_normalizations: list[str] = []
+        for attempt in range(1, 3):
+            raw = client.chat(messages, max_tokens=350, temperature=0.0)
+            try:
+                payload, normalizations = self._parse_and_normalize(raw)
+                all_normalizations.extend(normalizations)
+                return self._validate(
+                    payload, context, utterance, correlation,
+                    "hermes" if attempt == 1 else "hermes_schema_retry",
+                    0.9 if attempt == 1 else 0.8,
+                    attempt_count=attempt,
+                    normalizations=tuple(all_normalizations),
+                    validation_errors=tuple(errors),
+                )
+            except (AgentOutputError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                errors.append(str(exc))
+                if attempt == 1:
+                    messages.extend([
+                        {"role": "assistant", "content": raw},
+                        {"role": "user", "content": (
+                            "Your prior answer could not be accepted: "
+                            f"{exc}. Return the corrected JSON object only. "
+                            "Use null for absent IDs and arrays for steps, reuse, "
+                            "refresh, and missing."
+                        )},
+                    ])
+
+        # Invalid model formatting must never cause an unrelated journey to be
+        # selected. Ask the user to clarify and preserve structural diagnostics.
+        payload = {
+            "intent": JourneyIntent.UNKNOWN.value,
+            "target_journey_id": None,
+            "target_appointment_id": None,
+            "steps": ["ask_clarification"],
+            "reuse": [],
+            "refresh": [],
+            "missing": ["intent"],
+        }
         return self._validate(
             payload, context, utterance, correlation,
-            "deterministic_fallback", 1.0,
+            "safe_clarification", 0.0,
+            attempt_count=2,
+            normalizations=tuple(all_normalizations),
+            validation_errors=tuple(errors),
         )
 
-    @staticmethod
-    def _parse(raw: str) -> dict:
+    @classmethod
+    def _parse_and_normalize(cls, raw: str) -> tuple[dict, tuple[str, ...]]:
         candidate = raw.strip()
         if not candidate.startswith("{"):
             start, end = candidate.find("{"), candidate.rfind("}")
@@ -120,53 +164,25 @@ class CareJourneyAgent:
                 raise AgentOutputError("Care Journey Agent did not return JSON")
             candidate = candidate[start:end + 1]
         payload = json.loads(candidate)
+        if not isinstance(payload, dict):
+            raise AgentOutputError("Care Journey Agent did not return a JSON object")
         expected = {
             "intent", "target_journey_id", "target_appointment_id", "steps",
             "reuse", "refresh", "missing",
         }
-        if not isinstance(payload, dict) or set(payload) != expected:
+        if set(payload) - expected or "intent" not in payload:
             raise AgentOutputError("Care Journey Agent returned an invalid schema")
-        return payload
-
-    @staticmethod
-    def _fallback(text: str, context: dict, active_journey_id: str | None) -> dict:
-        lowered = " ".join(text.lower().split())
-        journeys = context.get("journeys", [])
-        appointments = context.get("appointments", [])
-        target = active_journey_id
-        if target not in {item.get("journey_id") for item in journeys}:
-            target = journeys[0].get("journey_id") if journeys else None
-        appointment = next(
-            (item for item in appointments if item.get("journey_id") == target and item.get("status") == "confirmed"),
-            next((item for item in appointments if item.get("status") == "confirmed"), None),
-        )
-        if re.search(r"\b(reschedule|move|change).{0,30}\b(appointment|scan|mri|booking|it)\b", lowered):
-            intent = JourneyIntent.RESCHEDULE_APPOINTMENT.value
-            target = appointment.get("journey_id") if appointment else target
-            steps = ["load_confirmed_appointment", "search_replacement_slots", "request_exact_consents"]
-            reuse = ["procedure_code", "selected_care_path", "current_plan", "provider_verification"]
-            refresh = ["appointment_availability"]
-            missing = [] if appointment else ["confirmed_appointment"]
-        elif "list" in lowered and "journey" in lowered or "all my journeys" in lowered:
-            intent, steps, reuse, refresh, missing = JourneyIntent.LIST_JOURNEYS.value, ["read_journey_index"], [], [], []
-        elif any(term in lowered for term in ("status", "what happened", "where are we")):
-            intent, steps, reuse, refresh, missing = JourneyIntent.JOURNEY_STATUS.value, ["read_journey_status"], [], [], []
-        elif any(term in lowered for term in ("i need", "i want", "set up", "setup", "arrange")):
-            intent, target = JourneyIntent.NEW_CARE_REQUEST.value, None
-            steps, reuse, refresh, missing = ["start_journey", "onboard_request"], [], [], []
-        elif target:
-            intent, steps, reuse, refresh, missing = JourneyIntent.CONTINUE_JOURNEY.value, ["continue_active_stage"], [], [], []
-        else:
-            intent, steps, reuse, refresh, missing = JourneyIntent.UNKNOWN.value, ["ask_clarification"], [], [], ["intent"]
-        return {
-            "intent": intent,
-            "target_journey_id": target,
-            "target_appointment_id": appointment.get("appointment_id") if appointment else None,
-            "steps": steps,
-            "reuse": reuse,
-            "refresh": refresh,
-            "missing": missing,
-        }
+        normalized = {name: payload.get(name) for name in expected}
+        changes: list[str] = []
+        for name in ("target_journey_id", "target_appointment_id"):
+            if isinstance(normalized[name], str) and not normalized[name].strip():
+                normalized[name] = None
+                changes.append(f"{name}:empty_string_to_null")
+        for name in ("steps", "reuse", "refresh", "missing"):
+            if normalized[name] is None or normalized[name] is False:
+                normalized[name] = []
+                changes.append(f"{name}:empty_value_to_array")
+        return normalized, tuple(changes)
 
     @staticmethod
     def _validate(
@@ -176,6 +192,10 @@ class CareJourneyAgent:
         correlation_id: str,
         source: str,
         confidence: float,
+        *,
+        attempt_count: int = 1,
+        normalizations: tuple[str, ...] = (),
+        validation_errors: tuple[str, ...] = (),
     ) -> JourneyPlan:
         try:
             intent = JourneyIntent(str(payload["intent"]))
@@ -190,6 +210,14 @@ class CareJourneyAgent:
             valid_appointments = set(appointment_map)
             journey_id = payload.get("target_journey_id")
             appointment_id = payload.get("target_appointment_id")
+            if intent == JourneyIntent.NEW_CARE_REQUEST and (
+                journey_id is not None or appointment_id is not None
+            ):
+                raise ValueError("a new care request cannot target an existing journey")
+            if intent == JourneyIntent.CONTINUE_JOURNEY and journey_id is None:
+                raise ValueError("continuing care requires a target journey")
+            if intent == JourneyIntent.RESCHEDULE_APPOINTMENT and appointment_id is None:
+                raise ValueError("rescheduling requires a target appointment")
             if journey_id is not None and journey_id not in valid_journeys:
                 raise ValueError("agent referenced an unauthorized journey")
             if appointment_id is not None and appointment_id not in valid_appointments:
@@ -206,5 +234,5 @@ class CareJourneyAgent:
             intent, correlation_id, utterance_id, journey_id, appointment_id,
             tuple(map(str, payload["steps"])), tuple(map(str, payload["reuse"])),
             tuple(map(str, payload["refresh"])), tuple(map(str, payload["missing"])),
-            source, confidence,
+            source, confidence, attempt_count, normalizations, validation_errors,
         )
