@@ -71,6 +71,15 @@ documents, or private SSH keys.
    npm run dev
    ```
 
+### Hospital knowledge engine
+
+Set `ABYSS_KNOWLEDGE_DB` to the knowledge engine's SQLite database to make the
+care journey retrieve hospital machine-readable-file rates for its verified
+procedure code. The adapter opens this database read-only. Returned records
+include the hospital source URL, publication/retrieval timestamps, confidence,
+and verification state. Published rates are facility evidence—not proof of
+insurance network participation or a guaranteed member out-of-pocket price.
+
 ## Repository map
 
 ```text

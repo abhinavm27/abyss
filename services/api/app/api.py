@@ -18,6 +18,7 @@ from abyss.agent import explain
 from abyss.hermes_client import HermesError
 from abyss.domain import ConsentAction, DecisionFact, VerificationStatus
 from abyss.journey import CareJourney
+from abyss.knowledge import SQLiteHospitalKnowledgeCatalog
 
 from . import auth, db, retrieval
 from .ingest import sbc
@@ -31,6 +32,14 @@ app = FastAPI(title="ABYSS", version="0.1.0")
 # application database; it must never silently turn a sandbox receipt into a
 # production action.
 _journeys: dict[str, CareJourney] = {}
+
+
+def _journey_dependencies() -> dict:
+    """Build adapters without coupling the journey domain to FastAPI."""
+    knowledge_db = os.getenv("ABYSS_KNOWLEDGE_DB")
+    if not knowledge_db:
+        return {}
+    return {"hospital_knowledge": SQLiteHospitalKnowledgeCatalog(knowledge_db)}
 
 
 @app.websocket("/ws")
@@ -123,6 +132,7 @@ def _journey_payload(journey: CareJourney) -> dict:
              "annual_total": item.annual_total, "annual_premium": item.annual_premium,
              "hard_failures": list(item.hard_failures)} for item in journey.evaluations
         ],
+        "hospital_rates": [item.as_dict() for item in journey.hospital_rates],
         "receipts": [
             {"action": receipt.action, "status": receipt.status, "sandbox": receipt.sandbox,
              "scope": receipt.consent_scope, "idempotency_key": receipt.idempotency_key,
@@ -139,7 +149,7 @@ def _journey_payload(journey: CareJourney) -> dict:
 @app.post("/api/journeys")
 def start_journey(body: JourneyStartIn, user_id: int = Depends(require_user)):
     journey_id = f"journey-{uuid.uuid4().hex[:12]}"
-    journey = CareJourney.open(journey_id, user_id=str(user_id))
+    journey = CareJourney.open(journey_id, user_id=str(user_id), **_journey_dependencies())
     now = datetime.now(timezone.utc)
     for name, value in (("requested_procedure", body.procedure), ("preferred_provider", body.provider),
                         ("preferred_facility", body.facility)):

@@ -58,7 +58,7 @@ function render() {
   } else if (journey.stage === "compare") {
     controls.append(button("Run deterministic plan comparison", async () => {
       journey = await request(`/api/journeys/${journey.journey_id}/compare`, { method: "POST" });
-      addMessage("Three seeded paths were evaluated and ranked by deterministic annual-cost rules.");
+      addMessage(`The Knowledge Engine retrieved ${journey.hospital_rates.length} sourced hospital options. Three plan paths were then ranked by deterministic annual-cost rules.`);
     }));
   } else if (journey.stage === "recommend") {
     controls.append(button("Continue with recommended plan", async () => {
@@ -104,6 +104,9 @@ function render() {
   el("evaluations").innerHTML = journey?.evaluations?.length
     ? `<ul>${journey.evaluations.map((x) => `<li><b>${x.plan_name}</b>: $${x.annual_total.toLocaleString()}${x.feasible ? "" : " (constraint failed)"}</li>`).join("")}</ul>`
     : "No comparison yet.";
+  el("hospitals").innerHTML = journey?.hospital_rates?.length
+    ? `<p>Published rates; network status unknown.</p><ul>${journey.hospital_rates.slice(0, 3).map((x) => `<li><b>${x.hospital}</b>: typical $${x.typical.toLocaleString()} (${x.low.toLocaleString()}–${x.high.toLocaleString()})</li>`).join("")}</ul>`
+    : "No hospital evidence yet.";
   el("receipts").innerHTML = journey?.receipts?.length
     ? `<ul>${journey.receipts.map((x) => `<li>${x.action}: ${x.status}</li>`).join("")}</ul>`
     : "No sandbox receipts yet.";

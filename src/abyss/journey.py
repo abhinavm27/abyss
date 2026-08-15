@@ -9,6 +9,11 @@ from .agents import KnowledgeAgent, MatchingAgent, OnboardingAgent
 from .catalogs import SeededCatalog
 from .domain import CareState, ConsentAction, DecisionFact, VerificationStatus
 from .evaluation import PathEvaluation, evaluate, rank
+from .knowledge import (
+    HospitalKnowledgeCatalog,
+    NoHospitalKnowledgeCatalog,
+    PublishedHospitalRate,
+)
 from .memory import FactLedger
 from .observability import AuditLedger, JourneyEvent
 from .procedures import ProcedureCatalog, ProcedureResolution
@@ -31,6 +36,8 @@ class CareJourney:
     procedure_catalog: ProcedureCatalog = field(default_factory=ProcedureCatalog)
     procedure_resolution: ProcedureResolution | None = None
     matching_reason: str | None = None
+    hospital_knowledge: HospitalKnowledgeCatalog = field(default_factory=NoHospitalKnowledgeCatalog)
+    hospital_rates: list[PublishedHospitalRate] = field(default_factory=list)
     memory: FactLedger = field(default_factory=FactLedger)
     audit: AuditLedger = field(default_factory=AuditLedger)
 
@@ -101,6 +108,22 @@ class CareJourney:
             raise RuntimeError("comparison is only available in compare stage")
         request = self.matching_agent.request_evaluation(plan_ids, provider_id=provider_id)
         provider = self.catalogs.provider(request.provider_id)
+        procedure_code = self.workflow.care_state.facts.get("procedure_code")
+        self.hospital_rates = (
+            self.hospital_knowledge.prices_for_code(str(procedure_code.value))
+            if procedure_code else []
+        )
+        self.audit.append(
+            self.journey_id,
+            "hospital_catalog_retrieved",
+            actor="knowledge_engine",
+            payload={
+                "procedure_code": str(procedure_code.value) if procedure_code else None,
+                "source": self.hospital_knowledge.source_name,
+                "facility_count": len(self.hospital_rates),
+                "network_status": "unknown",
+            },
+        )
         self.evaluations = rank([evaluate(self.catalogs.plan(plan_id), provider) for plan_id in request.plan_ids])
         self.audit.append(self.journey_id, "matching_requested", actor="matching_agent",
                           payload={"plan_ids": list(request.plan_ids), "provider_id": request.provider_id})

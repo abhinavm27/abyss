@@ -2,6 +2,7 @@ from unittest import TestCase
 
 from abyss.domain import ConsentAction
 from abyss.journey import CareJourney
+from abyss.knowledge import PublishedHospitalRate
 from abyss.agents import KnowledgeAgent, OnboardingAgent
 from abyss.domain import DecisionFact, VerificationStatus
 from datetime import UTC, datetime
@@ -9,6 +10,40 @@ from abyss.workflow import WorkflowStage
 
 
 class VerticalSliceTests(TestCase):
+    def test_comparison_retrieves_hospital_evidence_for_verified_code(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                self.code = code
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "MRI knee", code, "HCPCS",
+                    2, 300, 400, 500, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        knowledge = FakeHospitalKnowledge()
+        journey = CareJourney.open("journey-knowledge", hospital_knowledge=knowledge)
+        journey.record_fact(DecisionFact(
+            "procedure_code", "73721", "procedure_catalog", datetime.now(UTC),
+            1.0, VerificationStatus.VERIFIED,
+        ))
+        journey.record_consent(
+            ConsentAction.PROCESS_DOCUMENTS, approved=True, scope="seeded documents"
+        )
+        journey.advance()
+        journey.compare(["wa-plan-b"])
+
+        self.assertEqual(knowledge.code, "73721")
+        self.assertEqual(journey.hospital_rates[0].hospital, "Hospital A")
+        event = next(
+            item for item in journey.audit.for_journey("journey-knowledge")
+            if item.event_type == "hospital_catalog_retrieved"
+        )
+        self.assertEqual(event.payload["facility_count"], 1)
+        self.assertEqual(event.payload["network_status"], "unknown")
+
     def test_onboarding_agent_is_orchestrated_into_fact_ledger(self) -> None:
         class FakeModel:
             def chat(self, messages, **kwargs):

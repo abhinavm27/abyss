@@ -261,6 +261,23 @@ export interface CareJourneySnapshot {
     annual_premium: number;
     hard_failures: string[];
   }[];
+  hospital_rates: {
+    hospital_id: number;
+    hospital: string;
+    address: string | null;
+    description: string | null;
+    procedure_code: string;
+    code_type: string | null;
+    rate_count: number;
+    low: number;
+    typical: number;
+    high: number;
+    source: { mrf_url: string | null; source_page_url: string | null; published_at: string | null; retrieved_at: string };
+    confidence: number;
+    verification_status: string;
+    consent_requirement: string;
+    network_status: "unknown";
+  }[];
   receipts: {
     action: string;
     status: string;
