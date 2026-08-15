@@ -193,11 +193,11 @@ function DecisionCard({ onAnswer }: { onAnswer: () => void }) {
   );
 }
 
-function RecommendationCard({ onContinue, onExplain }: { onContinue: () => void; onExplain: () => void }) {
+function RecommendationCard({ planName, onContinue, onExplain }: { planName: string; onContinue: () => void; onExplain: () => void }) {
   return (
     <section className="vela-recommendation-card">
       <div className="vela-verified"><Check /></div>
-      <h2>Keep your current insurance</h2>
+      <h2>{planName}</h2>
       <p><Building2 />Northwest Imaging</p>
       <p><CalendarDays />Tuesday at 10:30 AM</p>
       <hr />
@@ -212,19 +212,19 @@ function RecommendationCard({ onContinue, onExplain }: { onContinue: () => void;
   );
 }
 
-function ConsentCard({ onApprove, onBack }: { onApprove: () => void; onBack: () => void }) {
+type ConsentCopy = { title: string; description: string; items: string[]; button: string };
+
+function ConsentCard({ copy, onApprove, onBack }: { copy: ConsentCopy; onApprove: () => void; onBack: () => void }) {
   return (
     <section className="vela-consent-card">
       <div className="vela-consent-icon"><LockKeyhole /></div>
-      <h2>Your approval is required to continue.</h2>
-      <p>VELA is ready to schedule with the recommended provider on your behalf.</p>
+      <h2>{copy.title}</h2>
+      <p>{copy.description}</p>
       <div className="vela-consent-list">
         <b>What VELA will do</b>
-        <span><Check />Share relevant information with the provider</span>
-        <span><Check />Request the next available appointment</span>
-        <span><Check />Receive and manage appointment details</span>
+        {copy.items.map((item) => <span key={item}><Check />{item}</span>)}
       </div>
-      <button className="vela-approve" onClick={onApprove}>Approve and continue</button>
+      <button className="vela-approve" onClick={onApprove}>{copy.button}</button>
       <button className="vela-review" onClick={onBack}>Review details</button>
     </section>
   );
@@ -265,10 +265,12 @@ export function VelaExperience() {
   const [journey, setJourney] = useState<CareJourneySnapshot | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [chatValue, setChatValue] = useState("");
+  const [careRequest, setCareRequest] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatStarted, setChatStarted] = useState(false);
   const [chatVisualProgress, setChatVisualProgress] = useState(0);
   const [voiceStarted, setVoiceStarted] = useState(false);
+  const [consentIndex, setConsentIndex] = useState(0);
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([{ role: "assistant", text: "Where do you need to go from here? Tell me what care you need and I’ll ask only what changes the recommendation." }]);
   const [documents, setDocuments] = useState<VelaDocument[]>([
     { id: "demo-sbc", name: "Current Plan SBC.pdf", kind: "Summary of Benefits", status: "Verified", added: "Aug 15" },
@@ -292,6 +294,15 @@ export function VelaExperience() {
     if (index >= sceneOrder.indexOf("recommendation")) return 4;
     return Math.max(0, index - 1);
   }, [index, scene]);
+  const selectedEvaluation = journey?.evaluations.find((item) => item.feasible) ?? journey?.evaluations[0];
+  const recommendedPlanName = liveMode && selectedEvaluation ? `Switch to ${selectedEvaluation.plan_name}` : "Keep your current insurance";
+  const liveConsentCopies: ConsentCopy[] = [
+    { title: "Approve enrollment in the recommended plan.", description: `VELA is ready to submit a sandbox enrollment for ${selectedEvaluation?.plan_name ?? "the recommended plan"}.`, items: ["Submit the selected plan and member information", "Receive and save the enrollment receipt", "Make no change to current coverage yet"], button: "Approve enrollment" },
+    { title: "Approve the coverage transition.", description: "Enrollment is confirmed. VELA must separately verify the effective date before changing coverage.", items: ["Confirm the new coverage effective date", "Verify the first premium is recorded", "Preserve the prior plan until confirmation"], button: "Approve transition" },
+    { title: "Approve sharing with the provider.", description: "VELA needs permission to verify the selected path with the provider.", items: ["Share only the relevant care and coverage details", "Verify network and authorization requirements", "Save the provider verification receipt"], button: "Approve verification" },
+    { title: "Approve appointment booking.", description: "VELA is ready to schedule with the recommended provider on your behalf.", items: ["Request the next available appointment", "Receive and manage appointment details", "Save the booking confirmation"], button: "Approve and book" },
+  ];
+  const demoConsentCopy: ConsentCopy = { title: "Your approval is required to continue.", description: "VELA is ready to schedule with the recommended provider on your behalf.", items: ["Share relevant information with the provider", "Request the next available appointment", "Receive and manage appointment details"], button: "Approve and continue" };
 
   useEffect(() => {
     if (scene !== "understanding" && scene !== "context" && scene !== "working" && scene !== "verifying" && scene !== "booking") return;
@@ -314,6 +325,8 @@ export function VelaExperience() {
     setChatStarted(false);
     setChatVisualProgress(0);
     setVoiceStarted(false);
+    setConsentIndex(0);
+    setCareRequest("");
   };
 
   const begin = async () => {
@@ -331,6 +344,7 @@ export function VelaExperience() {
 
   const sendChat = async () => {
     const text = chatValue.trim(); if (!text) return;
+    setCareRequest(text);
     setChatStarted(true); setChatVisualProgress((current) => Math.min(.62, current + .08));
     setChatTurns((turns) => [...turns, { role: "user", text }]); setChatValue(""); setChatBusy(true);
     try {
@@ -360,10 +374,12 @@ export function VelaExperience() {
       setDocuments((items) => [newDocument, ...items]);
       if (liveMode) {
         const started = journey ?? await api.startJourney();
-        setJourney(started);
+        const spokenRequest = [...voice.transcript].reverse().find((turn) => turn.role === "user")?.text;
+        const onboarded = started.stage === "intake" ? await api.journeyOnboard(started.journey_id, careRequest || spokenRequest || "Keep Dr. Lee. MRI knee without contrast on September 4, 2026. Coverage ends August 31, 2026.") : started;
+        setJourney(onboarded);
         if (file.type.startsWith("image/")) await api.scanCard(file);
         else await api.parseSbc(file);
-        const consented = await api.journeyConsent(started.journey_id, {
+        const consented = await api.journeyConsent(onboarded.journey_id, {
           action: "process_documents",
           scope: `coverage document ${file.name}`,
           approved: true,
@@ -384,8 +400,7 @@ export function VelaExperience() {
     setBusy(true);
     try {
       if (liveMode && journey) {
-        const onboarded = await api.journeyOnboard(journey.journey_id, "Keep Dr. Lee. MRI knee without contrast on September 4, 2026. Coverage ends August 31, 2026.");
-        const compared = await api.journeyCompare(onboarded.journey_id);
+        const compared = await api.journeyCompare(journey.journey_id);
         setJourney(compared);
       }
       setScene("verifying");
@@ -401,18 +416,27 @@ export function VelaExperience() {
     try {
       if (liveMode && journey) {
         let current = journey;
-        if (current.stage === "recommend") current = await api.journeyAdvance(current.journey_id);
+        if (consentIndex === 0 && current.stage === "recommend") current = await api.journeyAdvance(current.journey_id);
+        const actions = ["enroll_plan", "transition_coverage", "share_with_provider", "book_appointment"];
+        const scopes = [selectedEvaluation?.plan_id ?? "recommended plan", `current to ${selectedEvaluation?.plan_id ?? "recommended plan"}`, "dr-lee / seattle-general", "dr-lee / 2026-09-04 10:30"];
+        const action = actions[consentIndex];
+        const scope = scopes[consentIndex];
         const consented = await api.journeyConsent(current.journey_id, {
-          action: "enroll_plan",
-          scope: "recommended care path",
+          action,
+          scope,
           approved: true,
         });
         const actioned = await api.journeyAction(consented.journey_id, {
-          action: "enroll_plan",
-          scope: "recommended care path",
-          idempotency_key: `vela-enroll-${consented.journey_id}`,
+          action,
+          scope,
+          idempotency_key: `vela-${action}-${consented.journey_id}`,
+          ...(action === "transition_coverage" ? { new_effective_date: "2026-09-01", first_premium_confirmed: true } : {}),
         });
         setJourney(actioned);
+        if (consentIndex < actions.length - 1) {
+          setConsentIndex((value) => value + 1);
+          return;
+        }
       }
       setScene("booking");
     } catch (error) {
@@ -438,8 +462,8 @@ export function VelaExperience() {
             {scene === "listening" && inputMode === "voice" && <div className="vela-start"><p>Tell VELA what care you need, or begin with the guided demo.</p><button onClick={() => void begin()}>{(liveMode ? voice.isActive : demoMic.active) ? <><Mic />Listening now</> : <><Mic />Start a care request</>}</button></div>}
             {["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
             {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
-            {scene === "recommendation" && <RecommendationCard onContinue={() => setScene("consent")} onExplain={() => setNotice("VELA compared annual cost, network status, medication coverage, physician preference, and appointment availability. Deterministic rules selected the feasible path; Nemotron explained the evidence.")} />}
-            {scene === "consent" && <ConsentCard onApprove={approve} onBack={() => setScene("recommendation")} />}
+            {scene === "recommendation" && <RecommendationCard planName={recommendedPlanName} onContinue={() => { setConsentIndex(0); setScene("consent"); }} onExplain={() => setNotice("VELA compared annual cost, network status, medication coverage, physician preference, and appointment availability. Deterministic rules selected the feasible path; Nemotron explained the evidence.")} />}
+            {scene === "consent" && <ConsentCard copy={liveMode ? liveConsentCopies[consentIndex] : demoConsentCopy} onApprove={approve} onBack={() => setScene("recommendation")} />}
             {scene === "booking" && <AgentPanel activeCount={4} />}
             {scene === "complete" && <CompleteCard onReset={reset} />}
           </div>
