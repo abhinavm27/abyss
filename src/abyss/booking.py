@@ -321,3 +321,20 @@ class SandboxBookingService:
     def slot(self, slot_id: str) -> BookingSlot | None:
         with self._lock:
             return self._slots.get(slot_id)
+
+    def cancel_booking(self, slot_id: str) -> BookingSlot:
+        """Cancel only a known confirmed sandbox slot."""
+        with self._lock:
+            slot = self._slots.get(slot_id)
+            if slot is None or slot.status != "booked":
+                raise RuntimeError("original appointment is not confirmed")
+            cancelled = replace(slot, status="cancelled")
+            self._slots[slot_id] = cancelled
+            return cancelled
+
+    def restore_confirmed_slot(self, slot: BookingSlot) -> BookingSlot:
+        """Restore a persisted sandbox receipt as confirmed inventory state."""
+        confirmed = replace(slot, status="booked")
+        with self._lock:
+            self._slots[slot.slot_id] = confirmed
+        return confirmed

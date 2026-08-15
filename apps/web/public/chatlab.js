@@ -1,6 +1,8 @@
 const API = `http://${location.hostname}:8011`;
 const DEMO = { email: "demo@example.test", password: "demo-password-123" };
 let journey = null;
+let careContext = { journeys: [], appointments: [], scheduled_tasks: [] };
+let lastAgentPlan = null;
 
 const el = (id) => document.getElementById(id);
 const messages = el("messages");
@@ -47,10 +49,34 @@ function button(label, handler, secondary = false) {
 
 function render() {
   el("stage").textContent = journey ? journey.stage : "Not started";
+  renderCareContext();
   const controls = el("controls");
   controls.replaceChildren();
   if (!journey) {
     controls.textContent = "Send a request to create a journey.";
+  } else if (journey.read_only_history) {
+    controls.innerHTML = "<p>This durable journey history is available to the Journey Agent. Material actions require its deterministic runtime to be restored.</p>";
+  } else if (journey.reschedule_original_slot) {
+    if (!journey.selected_booking_slot) {
+      controls.innerHTML = "<p>The original appointment is still confirmed. Choose a replacement slot below.</p>";
+    } else if (journey.reschedule_pending) {
+      controls.innerHTML = "<p>The replacement confirmation is pending. The original appointment remains confirmed.</p>";
+    } else {
+      controls.append(button("Approve replacement, then cancel original", async () => {
+        const bookingScope = journey.booking_consent_scope;
+        const cancellationScope = journey.cancellation_consent_scope;
+        if (!bookingScope || !cancellationScope) throw new Error("Exact reschedule consent scopes are unavailable.");
+        await request(`/api/journeys/${journey.journey_id}/consents`, { method: "POST", body: JSON.stringify({ action: "book_appointment", scope: bookingScope, approved: true }) });
+        await request(`/api/journeys/${journey.journey_id}/consents`, { method: "POST", body: JSON.stringify({ action: "cancel_appointment", scope: cancellationScope, approved: true }) });
+        journey = await request(`/api/journeys/${journey.journey_id}/reschedule`, { method: "POST", body: JSON.stringify({ booking_scope: bookingScope, cancellation_scope: cancellationScope, idempotency_key: `ui-reschedule-${journey.journey_id}-${journey.selected_booking_slot.slot_id}` }) });
+        if (journey.reschedule_pending) {
+          addMessage("The replacement is pending confirmation. I kept the original appointment and scheduled an exact-slot retry.");
+          void pollBookingTask();
+        } else {
+          addMessage("The replacement was confirmed first; only then was the original sandbox appointment cancelled.");
+        }
+      }));
+    }
   } else if (journey.stage === "intake") {
     if (journey.onboarding_missing?.length) {
       const note = document.createElement("p");
@@ -181,11 +207,31 @@ function render() {
     : "No sandbox receipts yet.";
 }
 
+function renderCareContext() {
+  const journeyList = el("journeys");
+  if (!careContext.journeys?.length) {
+    journeyList.textContent = "No care journeys yet.";
+  } else {
+    journeyList.innerHTML = careContext.journeys.map((item) => `<div class="journey-card ${journey?.journey_id === item.journey_id ? "active" : ""}"><span class="eyebrow">${escapeHtml(item.status)} · ${escapeHtml(item.stage)}</span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.journey_id)}</small><button type="button" data-journey-id="${escapeHtml(item.journey_id)}">${journey?.journey_id === item.journey_id ? "Active journey" : "Open journey"}</button></div>`).join("");
+    journeyList.querySelectorAll("button[data-journey-id]").forEach((node) => {
+      node.onclick = () => run(async () => {
+        journey = await request(`/api/journeys/${encodeURIComponent(node.dataset.journeyId)}`);
+        addMessage(`Switched to ${node.dataset.journeyId}.`);
+      });
+    });
+  }
+  const plan = el("agent-plan");
+  plan.innerHTML = lastAgentPlan
+    ? `<div class="agent-plan"><span class="eyebrow">${escapeHtml(lastAgentPlan.intent)}</span><b>${escapeHtml(lastAgentPlan.correlation_id)}</b><code>${escapeHtml(lastAgentPlan.steps.join(" → "))}</code></div>`
+    : "No message routed yet.";
+}
+
 async function run(work) {
   status.className = "";
   status.textContent = "Working…";
   try {
     await work();
+    if (localStorage.getItem("abyss.token")) careContext = await request("/api/care-context");
     status.textContent = journey ? `Stage: ${journey.stage}` : "Ready";
     render();
   } catch (error) {
@@ -195,13 +241,13 @@ async function run(work) {
 }
 
 async function pollBookingTask() {
-  for (let attempt = 0; attempt < 12 && journey?.stage === "book"; attempt += 1) {
+  for (let attempt = 0; attempt < 12 && (journey?.stage === "book" || journey?.reschedule_pending); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     try {
       journey = await request(`/api/journeys/${journey.journey_id}`);
       render();
       const task = journey.booking_tasks?.slice(-1)[0];
-      if (journey.stage === "complete") {
+      if (journey.stage === "complete" && !journey.reschedule_pending) {
         addMessage(journey.notifications?.slice(-1)[0]?.message || "The scheduled booking task completed.");
         status.textContent = "Booking confirmed";
         return;
@@ -234,19 +280,11 @@ el("composer").onsubmit = (event) => {
   addMessage(text, "user");
   run(async () => {
     if (!localStorage.getItem("abyss.token")) throw new Error("Sign in as the synthetic demo user first.");
-    if (!journey) {
-      journey = await request("/api/journeys", { method: "POST", body: JSON.stringify({}) });
-      journey = await request(`/api/journeys/${journey.journey_id}/onboard`, { method: "POST", body: JSON.stringify({ text, source: "user_request" }) });
-      addMessage(journey.onboarding_questions?.length ? journey.onboarding_questions.join(" ") : "The Onboarding and Knowledge agents recorded the intake facts.");
-    } else if (journey.stage === "intake") {
-      journey = await request(`/api/journeys/${journey.journey_id}/onboard`, { method: "POST", body: JSON.stringify({ text, source: "user_request" }) });
-      addMessage(journey.onboarding_questions?.length ? journey.onboarding_questions.join(" ") : "The intake facts were recorded.");
-    } else if (journey.stage === "book") {
-      journey = await request(`/api/journeys/${journey.journey_id}/booking/preferences`, { method: "POST", body: JSON.stringify({ text }) });
-      addMessage(journey.booking_slots.length ? `The Booking Agent found ${journey.booking_slots.length} matching synthetic slots. Choose one under Booking Agent.` : "No matching slots were found. Try a wider date range or any time of day.");
-    } else {
-      addMessage("Use the journey controls to run the next permissioned step.");
-    }
+    const result = await request("/api/care-agent/messages", { method: "POST", body: JSON.stringify({ text, active_journey_id: journey?.journey_id || null }) });
+    lastAgentPlan = result.plan;
+    careContext = result.context;
+    if (result.journey) journey = result.journey;
+    addMessage(result.reply);
   });
 };
 

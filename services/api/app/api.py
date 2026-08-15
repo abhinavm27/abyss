@@ -6,6 +6,7 @@ Runs on :8010 by default.
 from __future__ import annotations
 
 import io
+import json
 import os
 import sqlite3
 import uuid
@@ -16,10 +17,15 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, W
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from abyss.agent import explain
+from abyss.adapters import ActionReceipt
+from abyss.booking import BookingSlot
+from abyss.care_journey_agent import CareJourneyAgent, JourneyIntent
+from abyss.care_paths import CarePathSelection
 from abyss.hermes_client import HermesError
 from abyss.domain import ConsentAction, DecisionFact, VerificationStatus
 from abyss.journey import CareJourney
 from abyss.knowledge import SQLiteHospitalKnowledgeCatalog
+from abyss.workflow import WorkflowStage
 
 from . import auth, db, retrieval
 from .ingest import sbc
@@ -34,6 +40,7 @@ app = FastAPI(title="ABYSS", version="0.1.0")
 # production action.
 _journeys: dict[str, CareJourney] = {}
 _booking_worker_stop = Event()
+_care_journey_agent = CareJourneyAgent()
 
 
 def _booking_task_worker() -> None:
@@ -146,10 +153,21 @@ class JourneyBookingPreferencesIn(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
 
+class CareAgentMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
+    active_journey_id: str | None = None
+
+
+class JourneyRescheduleIn(BaseModel):
+    booking_scope: str = Field(min_length=1, max_length=500)
+    cancellation_scope: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
 def _journey_payload(journey: CareJourney) -> dict:
     journey.process_booking_tasks()
     plan_name = journey.catalogs.plan(journey.current_plan_id).name
-    return {
+    payload = {
         "journey_id": journey.journey_id,
         "stage": journey.stage.value,
         "onboarding_missing": list(journey.onboarding_missing),
@@ -184,6 +202,12 @@ def _journey_payload(journey: CareJourney) -> dict:
             if journey.selected_booking_slot else None
         ),
         "booking_consent_scope": journey.booking_consent_scope,
+        "cancellation_consent_scope": journey.cancellation_consent_scope,
+        "reschedule_original_slot": (
+            journey.reschedule_original_slot.as_dict(plan_name)
+            if journey.reschedule_original_slot else None
+        ),
+        "reschedule_pending": journey.reschedule_pending,
         "booking_tasks": [
             item.as_dict()
             for item in journey.booking_service.tasks_for_journey(journey.journey_id)
@@ -202,25 +226,333 @@ def _journey_payload(journey: CareJourney) -> dict:
              "payload": event.payload, "recorded_at": event.recorded_at.isoformat()}
             for event in journey.audit.for_journey(journey.journey_id)
         ],
+        "facts": [
+            {"name": fact.name, "value": fact.value, "source": fact.source,
+             "observed_at": fact.observed_at.isoformat(), "confidence": fact.confidence,
+             "verification_status": fact.verification_status.value,
+             "consent_requirement": fact.consent_required.value if fact.consent_required else None}
+            for fact in journey.workflow.care_state.facts.values()
+        ],
+        "consents": [
+            {"action": consent.action.value, "approved": consent.approved,
+             "actor": consent.actor, "scope": consent.scope,
+             "recorded_at": consent.recorded_at.isoformat()}
+            for consent in journey.workflow.care_state.consents
+        ],
     }
+    _persist_journey_projection(journey, payload)
+    return payload
+
+
+def _journey_user_id(journey: CareJourney) -> int:
+    return int(journey.workflow.care_state.session_id.rsplit(":", 1)[-1])
+
+
+def _persist_journey_projection(journey: CareJourney, payload: dict) -> None:
+    """Persist a user-scoped projection without making it action authority."""
+    conn = db.connect()
+    try:
+        db.init_db(conn)
+        user_id = _journey_user_id(journey)
+        now = datetime.now(timezone.utc).isoformat()
+        procedure = journey.workflow.care_state.facts.get("requested_procedure")
+        title = str(procedure.value) if procedure else "Care journey"
+        status = "complete" if journey.stage.value == "complete" else "active"
+        conn.execute(
+            """INSERT INTO care_journey
+               (journey_id,user_id,title,stage,status,snapshot_json,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(journey_id) DO UPDATE SET
+                 title=excluded.title, stage=excluded.stage, status=excluded.status,
+                 snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at""",
+            (journey.journey_id, user_id, title, journey.stage.value, status,
+             json.dumps(payload, default=str, separators=(",", ":")), now, now),
+        )
+        selected = journey.selected_booking_slot
+        confirmed = selected and journey.booking_service.slot(selected.slot_id)
+        if confirmed and confirmed.status == "booked":
+            appointment_id = f"appointment-{journey.journey_id}-{confirmed.slot_id}"
+            local_hospital = conn.execute(
+                "SELECT id FROM hospital WHERE id=?", (confirmed.hospital_id,)
+            ).fetchone()
+            local_hospital_id = confirmed.hospital_id if local_hospital else None
+            conn.execute(
+                """INSERT INTO appointment
+                   (appointment_id,user_id,journey_id,slot_id,hospital_id,code,description,
+                    booked_for,estimated_cost,note,status,source,updated_at,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(appointment_id) DO UPDATE SET
+                    status='confirmed', booked_for=excluded.booked_for,
+                    updated_at=excluded.updated_at""",
+                (appointment_id, user_id, journey.journey_id, confirmed.slot_id,
+                 local_hospital_id, confirmed.procedure_code,
+                 f"Synthetic appointment at {confirmed.hospital}", confirmed.starts_at,
+                 journey.selected_care_path.estimated_member_cost if journey.selected_care_path else None,
+                 "Sandbox booking receipt", "confirmed", "sandbox_booking", now, now),
+            )
+            if any(item.action == ConsentAction.CANCEL_APPOINTMENT.value for item in journey.receipts):
+                conn.execute(
+                    """UPDATE appointment SET status='cancelled', updated_at=?
+                       WHERE user_id=? AND journey_id=? AND appointment_id<>? AND status='confirmed'""",
+                    (now, user_id, journey.journey_id, appointment_id),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _user_care_context(conn: sqlite3.Connection, user_id: int) -> dict:
+    journey_rows = conn.execute(
+        """SELECT journey_id,title,stage,status,snapshot_json,created_at,updated_at
+           FROM care_journey WHERE user_id=? ORDER BY updated_at DESC""",
+        (user_id,),
+    ).fetchall()
+    journeys = []
+    for row in journey_rows:
+        snapshot = json.loads(row["snapshot_json"])
+        journeys.append({
+            "journey_id": row["journey_id"], "title": row["title"],
+            "stage": row["stage"], "status": row["status"],
+            "selected_care_path": snapshot.get("selected_care_path"),
+            "updated_at": row["updated_at"],
+        })
+    appointments = [dict(row) for row in conn.execute(
+        """SELECT appointment_id,journey_id,slot_id,hospital_id,code,description,
+                  booked_for,status,source,updated_at
+           FROM appointment WHERE user_id=? ORDER BY booked_for DESC, id DESC""",
+        (user_id,),
+    ).fetchall()]
+    active_plan = _active_plan_row(conn, user_id)
+    plan = None if active_plan is None else {
+        "plan_id": active_plan["id"], "label": active_plan["label"],
+        "payer_name": active_plan["payer_name"], "is_active": bool(active_plan["is_active"]),
+    }
+    return {
+        "user": {"user_id": str(user_id)},
+        "current_plan": plan,
+        "journeys": journeys,
+        "appointments": appointments,
+        "scheduled_tasks": [
+            task for journey in _journeys.values()
+            if _journey_user_id(journey) == user_id
+            for task in (item.as_dict() for item in journey.booking_service.tasks_for_journey(journey.journey_id))
+            if task["status"] in {"scheduled", "needs_user_action"}
+        ],
+    }
+
+
+def _owned_journey(journey_id: str | None, user_id: int) -> CareJourney | None:
+    journey = _journeys.get(journey_id or "")
+    if journey is None or _journey_user_id(journey) != user_id:
+        return None
+    return journey
+
+
+def _restore_completed_journey(
+    conn: sqlite3.Connection, journey_id: str | None, user_id: int
+) -> CareJourney | None:
+    """Restore only a receipt-backed confirmed appointment for rescheduling."""
+    if not journey_id:
+        return None
+    row = conn.execute(
+        """SELECT snapshot_json FROM care_journey
+           WHERE journey_id=? AND user_id=? AND stage='complete'""",
+        (journey_id, user_id),
+    ).fetchone()
+    appointment = conn.execute(
+        """SELECT slot_id FROM appointment
+           WHERE journey_id=? AND user_id=? AND status='confirmed'
+             AND source='sandbox_booking'
+           ORDER BY id DESC LIMIT 1""",
+        (journey_id, user_id),
+    ).fetchone()
+    if row is None or appointment is None:
+        return None
+    snapshot = json.loads(row["snapshot_json"])
+    path_data = snapshot.get("selected_care_path")
+    slot_data = snapshot.get("selected_booking_slot")
+    confirmed_receipt = any(
+        item.get("action") == ConsentAction.BOOK_APPOINTMENT.value
+        and item.get("status") == "sandbox_confirmed"
+        for item in snapshot.get("receipts", [])
+    )
+    if (
+        not path_data or not slot_data or not confirmed_receipt
+        or slot_data.get("slot_id") != appointment["slot_id"]
+    ):
+        return None
+    journey = CareJourney.open(
+        journey_id, user_id=str(user_id), **_journey_dependencies()
+    )
+    journey.workflow.stage = WorkflowStage.COMPLETE
+    journey.current_plan_id = str(path_data["plan_id"])
+    journey.selected_care_path = CarePathSelection(**path_data)
+    slot = BookingSlot(
+        slot_id=slot_data["slot_id"], hospital_id=slot_data["hospital_id"],
+        hospital=slot_data["hospital"], procedure_code=slot_data["procedure_code"],
+        starts_at=slot_data["starts_at"], duration_minutes=slot_data["duration_minutes"],
+        status="booked", source=slot_data.get("source", "seeded sandbox schedule"),
+        retry_demo=bool(slot_data.get("retry_demo")),
+    )
+    journey.selected_booking_slot = journey.booking_service.restore_confirmed_slot(slot)
+    journey.booking_slots = [journey.selected_booking_slot]
+    for receipt in snapshot.get("receipts", []):
+        journey.receipts.append(ActionReceipt(
+            receipt["action"], receipt["status"], journey_id, receipt["scope"],
+            receipt["idempotency_key"], datetime.fromisoformat(receipt["recorded_at"]),
+            bool(receipt.get("sandbox", True)),
+        ))
+    _journeys[journey_id] = journey
+    return journey
+
+
+def _open_journey(user_id: int, *, seed_defaults: bool = True) -> CareJourney:
+    journey_id = f"journey-{uuid.uuid4().hex[:12]}"
+    journey = CareJourney.open(journey_id, user_id=str(user_id), **_journey_dependencies())
+    if seed_defaults:
+        now = datetime.now(timezone.utc)
+        for name, value in (
+            ("requested_procedure", "MRI knee without contrast"),
+            ("preferred_provider", "Dr. Lee"),
+            ("preferred_facility", "Seattle General"),
+        ):
+            journey.record_fact(DecisionFact(
+                name, value, "user_request", now, 1.0, VerificationStatus.SOURCE_BACKED
+            ))
+    _journeys[journey_id] = journey
+    return journey
 
 
 @app.post("/api/journeys")
 def start_journey(body: JourneyStartIn, user_id: int = Depends(require_user)):
-    journey_id = f"journey-{uuid.uuid4().hex[:12]}"
-    journey = CareJourney.open(journey_id, user_id=str(user_id), **_journey_dependencies())
+    journey = _open_journey(user_id, seed_defaults=False)
     now = datetime.now(timezone.utc)
     for name, value in (("requested_procedure", body.procedure), ("preferred_provider", body.provider),
                         ("preferred_facility", body.facility)):
         journey.record_fact(DecisionFact(name, value, "user_request", now, 1.0, VerificationStatus.SOURCE_BACKED))
-    _journeys[journey_id] = journey
     return _journey_payload(journey)
 
 
+@app.get("/api/journeys")
+def list_user_journeys(
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
+    return _user_care_context(conn, user_id)
+
+
+@app.get("/api/care-context")
+def get_care_context(
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
+    return _user_care_context(conn, user_id)
+
+
+@app.post("/api/care-agent/messages")
+def care_agent_message(
+    body: CareAgentMessageIn,
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
+    context = _user_care_context(conn, user_id)
+    try:
+        plan = _care_journey_agent.plan(
+            body.text, context=context, active_journey_id=body.active_journey_id
+        )
+        journey = _owned_journey(plan.target_journey_id, user_id)
+        reply: str
+        if plan.intent == JourneyIntent.NEW_CARE_REQUEST:
+            journey = _open_journey(user_id, seed_defaults=False)
+            now = datetime.now(timezone.utc)
+            for name, value in (("preferred_provider", "Dr. Lee"),
+                                ("preferred_facility", "Seattle General")):
+                journey.record_fact(DecisionFact(
+                    name, value, "seeded_user_profile", now, 1.0,
+                    VerificationStatus.SOURCE_BACKED,
+                ))
+            journey.onboard(body.text, source="care_journey_agent")
+            reply = (" ".join(journey.onboarding_questions)
+                     if journey.onboarding_questions
+                     else "I opened a new care journey and recorded the intake facts.")
+        elif plan.intent == JourneyIntent.CONTINUE_JOURNEY:
+            if journey is None:
+                raise RuntimeError("the selected journey is not active on this server")
+            if journey.stage.value == "intake":
+                journey.onboard(body.text, source="care_journey_agent")
+                reply = (" ".join(journey.onboarding_questions)
+                         if journey.onboarding_questions else "I updated this journey's intake facts.")
+            elif journey.stage.value == "book" and not journey.reschedule_original_slot:
+                slots = journey.collect_booking_preferences(body.text)
+                reply = f"I found {len(slots)} matching synthetic appointment slots."
+            else:
+                reply = f"I resumed {journey.journey_id} at the {journey.stage.value} stage."
+        elif plan.intent == JourneyIntent.RESCHEDULE_APPOINTMENT:
+            if journey is None:
+                journey = _restore_completed_journey(
+                    conn, plan.target_journey_id, user_id
+                )
+            if journey is None:
+                raise RuntimeError("a receipt-backed confirmed appointment is required")
+            slots = journey.begin_reschedule(body.text)
+            reply = (f"I kept the confirmed appointment and found {len(slots)} replacement slots. "
+                     "Choose one; the original will only be cancelled after its replacement is confirmed.")
+        elif plan.intent == JourneyIntent.LIST_JOURNEYS:
+            reply = f"You have {len(context['journeys'])} care journeys. Choose one to make it active."
+        elif plan.intent == JourneyIntent.JOURNEY_STATUS:
+            if journey:
+                reply = f"{journey.journey_id} is currently at the {journey.stage.value} stage."
+            else:
+                active = context["journeys"][0] if context["journeys"] else None
+                reply = (f"Your most recent journey is at the {active['stage']} stage."
+                         if active else "You do not have a care journey yet.")
+        else:
+            reply = "Are you starting new care, continuing a journey, checking status, or rescheduling an appointment?"
+    except HermesError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    conn.commit()
+    journey_payload = _journey_payload(journey) if journey else None
+    conn.commit()
+    refreshed_context = _user_care_context(conn, user_id)
+    conn.execute(
+        """INSERT INTO care_agent_trace
+           (correlation_id,utterance_id,user_id,journey_id,intent,plan_json,message,created_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (plan.correlation_id, plan.utterance_id, user_id,
+         journey.journey_id if journey else plan.target_journey_id,
+         plan.intent.value, json.dumps(plan.as_dict(), separators=(",", ":")),
+         body.text, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return {
+        "reply": reply,
+        "plan": plan.as_dict(),
+        "journey": journey_payload,
+        "context": refreshed_context,
+    }
+
+
 @app.get("/api/journeys/{journey_id}")
-def get_journey(journey_id: str, user_id: int = Depends(require_user)):
+def get_journey(
+    journey_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
     journey = _journeys.get(journey_id)
-    if journey is None or not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
+    if journey is None:
+        row = conn.execute(
+            "SELECT snapshot_json FROM care_journey WHERE journey_id=? AND user_id=?",
+            (journey_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="journey not found")
+        payload = json.loads(row["snapshot_json"])
+        payload["read_only_history"] = True
+        return payload
+    if not journey.workflow.care_state.session_id.endswith(f":{user_id}"):
         raise HTTPException(status_code=404, detail="journey not found")
     return _journey_payload(journey)
 
@@ -329,6 +661,31 @@ def select_booking_slot(
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _journey_payload(journey)
+
+
+@app.post("/api/journeys/{journey_id}/reschedule")
+def reschedule_journey_appointment(
+    journey_id: str,
+    body: JourneyRescheduleIn,
+    user_id: int = Depends(require_user),
+):
+    journey = _owned_journey(journey_id, user_id)
+    if journey is None:
+        raise HTTPException(status_code=404, detail="journey not found")
+    try:
+        replacement, cancellation = journey.execute_reschedule(
+            booking_scope=body.booking_scope,
+            cancellation_scope=body.cancellation_scope,
+            idempotency_key=body.idempotency_key,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    payload = _journey_payload(journey)
+    payload["reschedule_receipts"] = {
+        "replacement": replacement.status,
+        "cancellation": cancellation.status if cancellation else None,
+    }
+    return payload
 
 
 class JourneyReasonIn(BaseModel):

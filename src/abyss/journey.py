@@ -61,6 +61,8 @@ class CareJourney:
     booking_preferences: BookingPreferences | None = None
     booking_slots: list[BookingSlot] = field(default_factory=list)
     selected_booking_slot: BookingSlot | None = None
+    reschedule_original_slot: BookingSlot | None = None
+    reschedule_pending: bool = False
     memory: FactLedger = field(default_factory=FactLedger)
     audit: AuditLedger = field(default_factory=AuditLedger)
 
@@ -241,7 +243,9 @@ class CareJourney:
         return self.booking_slots
 
     def select_booking_slot(self, slot_id: str) -> BookingSlot:
-        if self.stage != WorkflowStage.BOOK:
+        if self.stage != WorkflowStage.BOOK and not (
+            self.stage == WorkflowStage.COMPLETE and self.reschedule_original_slot
+        ):
             raise RuntimeError("appointment slots can only be selected in booking stage")
         slot = next((item for item in self.booking_slots if item.slot_id == slot_id), None)
         if slot is None or slot.status != "available":
@@ -261,6 +265,103 @@ class CareJourney:
             payload={"slot_id": slot.slot_id, "starts_at": slot.starts_at},
         )
         return slot
+
+    def begin_reschedule(self, text: str) -> list[BookingSlot]:
+        """Search replacements while preserving the confirmed appointment."""
+        if self.stage != WorkflowStage.COMPLETE or not self.selected_booking_slot:
+            raise RuntimeError("a confirmed appointment is required before rescheduling")
+        confirmed = self.booking_service.slot(self.selected_booking_slot.slot_id)
+        if confirmed is None or confirmed.status != "booked":
+            raise RuntimeError("the original appointment is not confirmed")
+        self.reschedule_original_slot = confirmed
+        self.reschedule_pending = False
+        service_date = self.workflow.care_state.facts.get("service_date")
+        default_date = str(service_date.value) if service_date else "2026-08-30"
+        self.booking_preferences = self.booking_agent.collect_preferences(
+            text, default_date=default_date,
+        )
+        self.selected_booking_slot = None
+        self.booking_slots = [
+            slot for slot in self.booking_service.search_slots(
+                hospital_id=self.selected_care_path.hospital_id,
+                hospital=self.selected_care_path.hospital,
+                procedure_code=self.selected_care_path.procedure_code,
+                preferences=self.booking_preferences,
+            ) if slot.slot_id != confirmed.slot_id
+        ]
+        self.audit.append(
+            self.journey_id,
+            "reschedule_slots_retrieved",
+            actor="care_journey_agent",
+            payload={"original_slot_id": confirmed.slot_id, "slot_count": len(self.booking_slots)},
+        )
+        return self.booking_slots
+
+    @property
+    def cancellation_consent_scope(self) -> str | None:
+        slot = self.reschedule_original_slot
+        if not slot:
+            return None
+        return f"cancel {slot.slot_id} / {slot.hospital} / {slot.starts_at}"
+
+    def execute_reschedule(
+        self,
+        *,
+        booking_scope: str,
+        cancellation_scope: str,
+        idempotency_key: str,
+    ) -> tuple[ActionReceipt, ActionReceipt | None]:
+        """Confirm the replacement before cancelling the original appointment."""
+        if self.stage != WorkflowStage.COMPLETE or not self.reschedule_original_slot:
+            raise RuntimeError("rescheduling is not active")
+        if not self.selected_booking_slot:
+            raise RuntimeError("choose a replacement appointment first")
+        if booking_scope != self.booking_consent_scope:
+            raise RuntimeError("replacement booking consent scope does not match")
+        if cancellation_scope != self.cancellation_consent_scope:
+            raise RuntimeError("cancellation consent scope does not match")
+        if not self.workflow.care_state.has_consent(ConsentAction.BOOK_APPOINTMENT, booking_scope):
+            raise RuntimeError("replacement booking approval is required")
+        if not self.workflow.care_state.has_consent(ConsentAction.CANCEL_APPOINTMENT, cancellation_scope):
+            raise RuntimeError("original appointment cancellation approval is required")
+        attempt = self.booking_service.request_booking(
+            journey_id=self.journey_id,
+            slot_id=self.selected_booking_slot.slot_id,
+            expected_scope=self.booking_consent_scope,
+            consent_scope=booking_scope,
+            idempotency_key=idempotency_key,
+        )
+        replacement = ActionReceipt(
+            ConsentAction.BOOK_APPOINTMENT.value,
+            "scheduled_retry" if attempt.status == "scheduled_retry" else "sandbox_confirmed",
+            self.journey_id, booking_scope, idempotency_key, datetime.now(UTC),
+        )
+        self.receipts.append(replacement)
+        if attempt.status == "scheduled_retry":
+            self.reschedule_pending = True
+            return replacement, None
+        cancellation = self._complete_reschedule(cancellation_scope, idempotency_key)
+        return replacement, cancellation
+
+    def _complete_reschedule(self, cancellation_scope: str, idempotency_key: str) -> ActionReceipt:
+        original = self.reschedule_original_slot
+        if original is None:
+            raise RuntimeError("original appointment is unavailable")
+        self.booking_service.cancel_booking(original.slot_id)
+        cancellation = ActionReceipt(
+            ConsentAction.CANCEL_APPOINTMENT.value, "sandbox_confirmed",
+            self.journey_id, cancellation_scope, f"{idempotency_key}-cancel",
+            datetime.now(UTC),
+        )
+        self.receipts.append(cancellation)
+        self.reschedule_original_slot = None
+        self.reschedule_pending = False
+        self.audit.append(
+            self.journey_id, "appointment_rescheduled", actor="booking_agent",
+            payload={"cancelled_slot_id": original.slot_id,
+                     "replacement_slot_id": self.selected_booking_slot.slot_id},
+        )
+        return cancellation
 
     @property
     def booking_consent_scope(self) -> str | None:
@@ -302,6 +403,11 @@ class CareJourney:
                     self.selected_care_path,
                     booking_consent=True,
                 )
+            if self.reschedule_pending:
+                cancellation_scope = self.cancellation_consent_scope
+                if cancellation_scope is None:
+                    raise RuntimeError("reschedule cancellation scope is unavailable")
+                self._complete_reschedule(cancellation_scope, task.idempotency_key)
             if self.stage == WorkflowStage.BOOK:
                 self.workflow.advance()
 
