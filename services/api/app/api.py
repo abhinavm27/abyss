@@ -365,6 +365,14 @@ def _owned_journey(journey_id: str | None, user_id: int) -> CareJourney | None:
     return journey
 
 
+def _prepare_chat_care_options(journey: CareJourney) -> bool:
+    """Advance a complete chat-only intake through read-only comparison."""
+    if journey.stage.value != "intake" or journey.onboarding_missing:
+        return False
+    journey.prepare_chat_care_options()
+    return True
+
+
 def _restore_completed_journey(
     conn: sqlite3.Connection, journey_id: str | None, user_id: int
 ) -> CareJourney | None:
@@ -531,9 +539,14 @@ def care_agent_message(
                     VerificationStatus.SOURCE_BACKED,
                 ))
             journey.onboard(body.text, source="care_journey_agent")
-            reply = (" ".join(journey.onboarding_questions)
-                     if journey.onboarding_questions
-                     else "I opened a new care journey and recorded the intake facts.")
+            if _prepare_chat_care_options(journey):
+                reply = (
+                    f"I found {len(journey.current_plan_options)} hospital options under your "
+                    f"current {journey.catalogs.plan(journey.current_plan_id).name}. "
+                    "Choose a hospital below; your insurance is not changing."
+                )
+            else:
+                reply = " ".join(journey.onboarding_questions)
         elif plan.intent == JourneyIntent.CONTINUE_JOURNEY:
             if journey is None:
                 journey = _restore_intake_journey(
@@ -543,8 +556,14 @@ def care_agent_message(
                 raise RuntimeError("the selected journey is not active on this server")
             if journey.stage.value == "intake":
                 journey.onboard(body.text, source="care_journey_agent")
-                reply = (" ".join(journey.onboarding_questions)
-                         if journey.onboarding_questions else "I updated this journey's intake facts.")
+                if _prepare_chat_care_options(journey):
+                    reply = (
+                        f"I found {len(journey.current_plan_options)} hospital options under your "
+                        f"current {journey.catalogs.plan(journey.current_plan_id).name}. "
+                        "Choose a hospital below; your insurance is not changing."
+                    )
+                else:
+                    reply = " ".join(journey.onboarding_questions)
             elif journey.stage.value == "book" and not journey.reschedule_original_slot:
                 slots = journey.collect_booking_preferences(body.text)
                 reply = f"I found {len(slots)} matching synthetic appointment slots."
@@ -633,6 +652,7 @@ def onboard_journey(journey_id: str, body: JourneyOnboardIn, user_id: int = Depe
         raise HTTPException(status_code=404, detail="journey not found")
     try:
         journey.onboard(body.text, source=body.source)
+        _prepare_chat_care_options(journey)
     except HermesError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:

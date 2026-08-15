@@ -14,6 +14,12 @@ class WorkflowTests(TestCase):
         with self.assertRaises(ConsentRequired):
             workflow.advance()
 
+    def test_chat_only_intake_does_not_create_document_consent(self) -> None:
+        workflow = AbyssWorkflow(CareState(session_id="demo-chat"))
+
+        self.assertEqual(workflow.complete_chat_intake(), WorkflowStage.COMPARE)
+        self.assertFalse(workflow.care_state.consents)
+
     def test_separate_enrollment_and_transition_approvals(self) -> None:
         state = CareState(session_id="demo")
         state.record_consent(

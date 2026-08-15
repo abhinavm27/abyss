@@ -83,16 +83,10 @@ function render() {
       note.textContent = `Waiting for: ${journey.onboarding_missing.join(", ")}. Answer in chat to continue.`;
       controls.append(note);
     } else {
-      controls.append(button("Approve synthetic document processing", async () => {
-        journey = await request(`/api/journeys/${journey.journey_id}/consents`, { method: "POST", body: JSON.stringify({ action: "process_documents", scope: "synthetic request and documents", approved: true }) });
-        addMessage("Consent recorded. Intake advanced to deterministic comparison.");
-      }));
+      controls.textContent = "Intake is complete. Preparing current-plan hospital options.";
     }
   } else if (journey.stage === "compare") {
-    controls.append(button("Build current-plan care options", async () => {
-      journey = await request(`/api/journeys/${journey.journey_id}/compare`, { method: "POST" });
-      addMessage(`I found ${journey.current_plan_options.length} hospital options under your current ${journey.current_plan_name} scenario. Choose one below, or review the separate alternative-plan scenario.`);
-    }));
+    controls.textContent = "Comparing hospitals under your current coverage.";
   } else if (journey.stage === "recommend") {
     const note = document.createElement("p");
     note.textContent = `Keep ${journey.current_plan_name} and choose a hospital below. Selecting does not book care.`;
@@ -103,18 +97,9 @@ function render() {
       addMessage(result.reason);
     }, true));
   } else if (journey.stage === "enroll") {
-    controls.append(button("Approve sandbox enrollment in WA Plan B", async () => {
-      await request(`/api/journeys/${journey.journey_id}/consents`, { method: "POST", body: JSON.stringify({ action: "enroll_plan", scope: "wa-plan-b", approved: true }) });
-      journey = await request(`/api/journeys/${journey.journey_id}/actions`, { method: "POST", body: JSON.stringify({ action: "enroll_plan", scope: "wa-plan-b", idempotency_key: `ui-enroll-${journey.journey_id}` }) });
-      addMessage("Sandbox enrollment completed and a receipt was recorded.");
-    }));
+    controls.textContent = "Plan switching is outside this hospital-booking demo. Your current coverage is unchanged.";
   } else if (journey.stage === "transition") {
-    controls.append(button("Approve safe coverage transition", async () => {
-      const scope = "current coverage to wa-plan-b";
-      await request(`/api/journeys/${journey.journey_id}/consents`, { method: "POST", body: JSON.stringify({ action: "transition_coverage", scope, approved: true }) });
-      journey = await request(`/api/journeys/${journey.journey_id}/actions`, { method: "POST", body: JSON.stringify({ action: "transition_coverage", scope, idempotency_key: `ui-transition-${journey.journey_id}`, new_effective_date: "2026-09-01", first_premium_confirmed: true }) });
-      addMessage("Coverage transition completed only after the new effective date and first premium were confirmed.");
-    }));
+    controls.textContent = "Plan switching is outside this hospital-booking demo. Your current coverage is unchanged.";
   } else if (journey.stage === "verify") {
     controls.append(button("Verify network and provider", async () => {
       const selected = journey.selected_care_path;
@@ -173,8 +158,7 @@ function render() {
   const alternativeCoverage = el("evaluations");
   if (journey?.alternative_plan) {
     const alt = journey.alternative_plan;
-    alternativeCoverage.innerHTML = `<div class="path-card"><span class="eyebrow">Optional switch scenario</span><b>${escapeHtml(alt.plan_name)}</b><strong>${money(alt.estimated_annual_total)} estimated annual total</strong><small>Potential savings ${money(alt.estimated_annual_savings)} · modeled at ${escapeHtml(alt.hospital)} · requires a separate eligibility and plan-switch flow</small><button id="explore-switch" type="button" class="secondary">Explore plan switch</button></div>`;
-    el("explore-switch").onclick = () => addMessage(`${alt.plan_name} is an exploration-only scenario. The separate eligibility and plan-switch flow is not part of this demo; your current-plan selection is unchanged.`);
+    alternativeCoverage.innerHTML = `<div class="path-card"><span class="eyebrow">Informational only · not part of this demo</span><b>${escapeHtml(alt.plan_name)}</b><strong>${money(alt.estimated_annual_total)} estimated annual total</strong><small>Potential savings ${money(alt.estimated_annual_savings)} · modeled at ${escapeHtml(alt.hospital)} · switching requires a separate eligibility and enrollment journey. Continue above with your current plan.</small></div>`;
   } else {
     alternativeCoverage.textContent = "No alternative scenario yet.";
   }

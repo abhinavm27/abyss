@@ -11,6 +11,38 @@ from abyss.workflow import WorkflowStage
 
 
 class VerticalSliceTests(TestCase):
+    def test_complete_chat_intake_prepares_current_plan_hospital_options(self) -> None:
+        class FakeHospitalKnowledge:
+            source_name = "test_knowledge_engine"
+
+            def prices_for_code(self, code):
+                return [PublishedHospitalRate(
+                    10, "Hospital A", "Seattle", "CBC with differential", code, "HCPCS",
+                    1, 50, 50, 50, "https://example.test/mrf",
+                    "https://example.test/source", "2026-04-01",
+                    "2026-08-15T12:00:00+00:00",
+                )]
+
+        journey = CareJourney.open(
+            "journey-chat-current-plan", hospital_knowledge=FakeHospitalKnowledge()
+        )
+        now = datetime.now(UTC)
+        for name, value in (
+            ("requested_procedure", "Complete blood count with differential"),
+            ("procedure_code", "85025"),
+            ("service_date", "2026-08-25"),
+            ("coverage_end_date", "2026-09-30"),
+        ):
+            journey.record_fact(DecisionFact(
+                name, value, "chat", now, 1.0, VerificationStatus.SOURCE_BACKED
+            ))
+
+        journey.prepare_chat_care_options()
+
+        self.assertEqual(journey.stage, WorkflowStage.RECOMMEND)
+        self.assertEqual(journey.current_plan_options[0].plan_id, "continuation")
+        self.assertFalse(journey.workflow.care_state.consents)
+
     def test_comparison_retrieves_hospital_evidence_for_verified_code(self) -> None:
         class FakeHospitalKnowledge:
             source_name = "test_knowledge_engine"

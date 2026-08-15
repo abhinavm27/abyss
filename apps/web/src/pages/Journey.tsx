@@ -35,21 +35,11 @@ export function Journey({ onBack }: { onBack: () => void }) {
 
   async function start() {
     const started = await api.startJourney();
-    const onboarded = await api.journeyOnboard(
+    return api.journeyOnboard(
       started.journey_id,
       "MRI knee without contrast. Care date August 30, 2026. Coverage ends September 30, 2026.",
       "seeded_journey",
     );
-    return api.journeyConsent(onboarded.journey_id, {
-      action: "process_documents",
-      scope: "synthetic request and documents",
-      approved: true,
-    });
-  }
-
-  async function compare() {
-    if (!snapshot) throw new Error("Start a journey first.");
-    return api.journeyCompare(snapshot.journey_id);
   }
 
   async function selectHospital(hospitalId: number) {
@@ -130,12 +120,6 @@ export function Journey({ onBack }: { onBack: () => void }) {
             <span className="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{snapshot.stage}</span>
           </div>
 
-          {snapshot.stage === "compare" && (
-            <button disabled={busy} onClick={() => void run(compare)} className="mt-4 w-full rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground">
-              Build current-plan hospital options
-            </button>
-          )}
-
           {snapshot.selected_care_path && (
             <section className="mt-5 rounded-2xl border border-primary/40 bg-primary/5 p-5">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-primary">Selected care path</p>
@@ -173,7 +157,7 @@ export function Journey({ onBack }: { onBack: () => void }) {
               <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-amber-700">Optional alternative coverage</p>
               <div className="mt-2 flex items-start justify-between gap-4"><h2 className="font-display text-xl font-semibold">{snapshot.alternative_plan.plan_name}</h2><strong>{money(snapshot.alternative_plan.estimated_annual_total)} / year</strong></div>
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">Potential annual savings {money(snapshot.alternative_plan.estimated_annual_savings)}. This requires a separate eligibility and plan-switch flow that is not included in this demo.</p>
-              <button type="button" onClick={() => setError("Plan-switch exploration is a separate flow and is not implemented in this demo. Your current coverage is unchanged.")} className="mt-4 w-full rounded-xl border border-amber-400 bg-transparent px-4 py-2.5 text-sm font-medium text-amber-800">Explore plan switch</button>
+              <p className="mt-3 text-xs font-medium text-amber-800">Informational only. Continue above with your current plan.</p>
             </section>
           )}
 

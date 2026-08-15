@@ -222,6 +222,40 @@ class CareJourney:
                                    "feasible_count": sum(item.feasible for item in self.evaluations)})
         return self.evaluations
 
+    def prepare_chat_care_options(
+        self,
+        plan_ids: list[str] | None = None,
+        provider_id: str = "dr-lee",
+    ) -> list[PathEvaluation]:
+        """Run the read-only comparison after a complete chat-only intake.
+
+        Chat messages are already explicit user input, so no document-processing
+        consent is recorded or implied. This method never selects a hospital,
+        changes coverage, verifies a provider, or books care.
+        """
+        if self.stage != WorkflowStage.INTAKE:
+            raise RuntimeError("chat care options can only be prepared from intake")
+        if self.onboarding_missing:
+            raise RuntimeError("complete the required intake facts before comparison")
+        required = {"requested_procedure", "procedure_code", "service_date", "coverage_end_date"}
+        missing = sorted(required - self.workflow.care_state.facts.keys())
+        if missing:
+            raise RuntimeError(f"complete the required intake facts: {', '.join(missing)}")
+
+        next_stage = self.workflow.complete_chat_intake()
+        self.audit.append(
+            self.journey_id,
+            "stage_advanced",
+            actor="care_journey_agent",
+            payload={"stage": next_stage.value, "intake_mode": "chat_only"},
+        )
+        evaluations = self.compare(
+            plan_ids or [self.current_plan_id, "wa-plan-a", "wa-plan-b"],
+            provider_id=provider_id,
+        )
+        self.advance()
+        return evaluations
+
     def select_current_care_path(self, hospital_id: int) -> CarePathSelection:
         if self.stage != WorkflowStage.RECOMMEND:
             raise RuntimeError("a care path can only be selected from recommendation")
