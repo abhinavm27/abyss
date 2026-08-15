@@ -25,7 +25,9 @@ class HermesConfig:
     def from_env(cls) -> "HermesConfig":
         base_url = os.getenv("HERMES_BASE_URL", "http://127.0.0.1:8642/v1").rstrip("/")
         api_key = os.getenv("HERMES_API_KEY", "")
-        model = os.getenv("HERMES_MODEL", "nvidia/Qwen3.6-35B-A3B-NVFP4")
+        model = os.getenv(
+            "HERMES_MODEL", "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
+        )
         if not api_key:
             raise HermesError("HERMES_API_KEY is not set")
         return cls(base_url=base_url, api_key=api_key, model=model)
@@ -79,4 +81,3 @@ class HermesClient:
             raise HermesError("Cannot reach Hermes; check the private SSH tunnel") from error
         except json.JSONDecodeError as error:
             raise HermesError("Hermes returned invalid JSON") from error
-

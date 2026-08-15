@@ -1,0 +1,48 @@
+# Hospital price-transparency domains ingested into the current abyss.db.
+#
+# Reconstructed from the live database, not hand-maintained — if you add a
+# hospital, also add its domain here (or regenerate with the one-liner below)
+# so the dataset stays a rebuildable artifact instead of only existing on
+# whichever machine ingested it.
+#
+# Rebuild with:
+#   abyss-ingest $(grep -v '^#' app/ingest/manifest.txt)
+#
+# Regenerate this file from an existing database with:
+#   .venv/bin/python -c "
+#   import sqlite3
+#   c = sqlite3.connect('abyss.db')
+#   for d in sorted({r[0].split('/')[2] for r in c.execute(
+#           'select mrf_url from hospital where mrf_url is not null')}):
+#       print(d)
+#   "
+#
+# Each domain's cms-hpt.txt often lists several hospitals in one health
+# system — ingesting the domain pulls in all of them, which is why 25 domains
+# produced 57 hospitals as of this writing.
+
+ajh.org
+baystatehealth.canto.com
+beverlyhospital.org
+bidmc.org
+bidmilton.org
+bidneedham.org
+bidplymouth.org
+dfci.widen.net
+emersonhealth.org
+exeterhospital.org
+hpt.trinity-health.org
+mountauburnhospital.org
+mrfs.hyvehealthcare.com
+nebh.org
+signature-healthcare.org
+ummh-price-transparency.s3.us-east-2.amazonaws.com
+winchesterhospital.org
+www.bmchealthsystem.org
+www.challiance.org
+www.childrenshospital.org
+www.holyokehealth.com
+www.lahey.org
+www.massgeneralbrigham.org
+www.tuftsmedicine.org
+zencloud-southshorehealth.s3.us-east-1.amazonaws.com

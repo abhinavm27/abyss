@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ABYSS Journey Chat</title>
+  <style>
+    :root{color-scheme:light;font-family:Inter,system-ui,sans-serif;color:#0f2d4d;background:#eefafa}*{box-sizing:border-box}body{margin:0}main{max-width:980px;margin:auto;padding:28px 18px}header{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:18px}h1{margin:0;font-size:30px}header p{margin:6px 0 0;color:#587183}.stage{border:1px solid #78b7b6;border-radius:999px;padding:7px 12px;font-size:13px;font-weight:700}.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}.panel{background:#fff;border:1px solid #c8dfdf;border-radius:18px;padding:18px}.chat{min-height:680px;display:flex;flex-direction:column}.messages{flex:1;overflow:auto}.msg{padding:10px 12px;border-radius:12px;margin:10px 0;max-width:82%;line-height:1.45}.assistant{background:#e7f3f2}.user{background:#0f2d4d;color:#fff;margin-left:auto}form{display:flex;gap:8px;border-top:1px solid #d8e7e7;padding-top:14px}input{flex:1;padding:12px;border:1px solid #aacaca;border-radius:10px;font-size:16px}button{padding:11px 14px;border:0;border-radius:10px;background:#0f2d4d;color:#fff;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.demo{width:100%;background:#1c8f91;margin-bottom:12px}.control{width:100%;margin-top:9px}.secondary{background:#e7f3f2;color:#0f2d4d;border:1px solid #aacaca}#status{font-size:13px;color:#587183;min-height:20px}.summary{font-size:13px;line-height:1.5}.summary h2{font-size:15px;margin:18px 0 8px}.summary ul{padding-left:18px}.error{color:#a22929!important}@media(max-width:760px){.grid{grid-template-columns:1fr}.chat{min-height:580px}header{align-items:start;flex-direction:column}}
+  </style>
+</head>
+<body>
+<main>
+  <header><div><h1>Care Journey Chat</h1><p>GN100 backend test lab · synthetic data only</p></div><span id="stage" class="stage">Not started</span></header>
+  <div class="grid">
+    <section class="panel chat">
+      <button id="login" class="demo" type="button">Sign in as synthetic demo user</button>
+      <div id="messages" class="messages"><div class="msg assistant">Sign in, then try: “I want an MRI scan for my knee.”</div></div>
+      <form id="composer"><input id="input" aria-label="Send a request or answer" placeholder="Send a request or answer…"><button type="submit">Send</button></form>
+      <p id="status"></p>
+    </section>
+    <aside class="panel summary">
+      <h2>Journey controls</h2><div id="controls"><p>Sign in and send a request to begin.</p></div>
+      <h2>Plan comparison</h2><div id="evaluations">No comparison yet.</div>
+      <h2>Receipts</h2><div id="receipts">No sandbox receipts yet.</div>
+    </aside>
+  </div>
+</main>
+<script src="/chatlab.js"></script>
+</body>
+</html>

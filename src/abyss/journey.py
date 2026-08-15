@@ -1,0 +1,146 @@
+"""Composition façade for the seeded ABYSS golden path."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from .adapters import ActionReceipt, SandboxAdapters
+from .agents import KnowledgeAgent, MatchingAgent, OnboardingAgent
+from .catalogs import SeededCatalog
+from .domain import CareState, ConsentAction, DecisionFact, VerificationStatus
+from .evaluation import PathEvaluation, evaluate, rank
+from .memory import FactLedger
+from .observability import AuditLedger, JourneyEvent
+from .procedures import ProcedureCatalog, ProcedureResolution
+from .workflow import AbyssWorkflow, WorkflowStage
+
+
+@dataclass(slots=True)
+class CareJourney:
+    journey_id: str
+    workflow: AbyssWorkflow
+    catalogs: SeededCatalog = field(default_factory=SeededCatalog)
+    adapters: SandboxAdapters = field(default_factory=SandboxAdapters)
+    matching_agent: MatchingAgent = field(default_factory=MatchingAgent)
+    onboarding_agent: OnboardingAgent = field(default_factory=OnboardingAgent)
+    knowledge_agent: KnowledgeAgent = field(default_factory=KnowledgeAgent)
+    evaluations: list[PathEvaluation] = field(default_factory=list)
+    receipts: list[ActionReceipt] = field(default_factory=list)
+    onboarding_missing: tuple[str, ...] = ()
+    onboarding_questions: tuple[str, ...] = ()
+    procedure_catalog: ProcedureCatalog = field(default_factory=ProcedureCatalog)
+    procedure_resolution: ProcedureResolution | None = None
+    matching_reason: str | None = None
+    memory: FactLedger = field(default_factory=FactLedger)
+    audit: AuditLedger = field(default_factory=AuditLedger)
+
+    @classmethod
+    def open(cls, journey_id: str, user_id: str = "synthetic-user", **agents: object) -> "CareJourney":
+        """Open a journey; agent dependencies may be injected for tests."""
+        return cls(journey_id, AbyssWorkflow(CareState(session_id=f"{journey_id}:{user_id}")), **agents)
+
+    @property
+    def stage(self) -> WorkflowStage:
+        return self.workflow.stage
+
+    def record_fact(self, fact: DecisionFact) -> None:
+        self.workflow.care_state.add_fact(fact)
+        self.memory.append(self.workflow.care_state.session_id, f"fact-{len(self.memory.records(self.workflow.care_state.session_id)) + 1}", fact)
+        self.audit.append(self.journey_id, "fact_recorded", actor="journey", payload={"name": fact.name, "status": fact.verification_status.value})
+
+    def onboard(self, text: str, *, source: str):
+        """Run bounded intake extraction and store candidate facts.
+
+        The agent may propose facts; the ledger preserves their inferred state.
+        No journey stage or decision is advanced by model output alone.
+        """
+        if self.stage != WorkflowStage.INTAKE:
+            raise RuntimeError("onboarding is only available in intake stage")
+        proposal = self.onboarding_agent.extract(text, source=source)
+        for fact in proposal.facts:
+            self.record_fact(fact)
+        procedure_fact = self.workflow.care_state.facts.get("requested_procedure")
+        procedure = procedure_fact.value if procedure_fact else None
+        if procedure:
+            normalized = " ".join(text.lower().replace("-", " ").split())
+            existing_code = self.workflow.care_state.facts.get("procedure_code")
+            confirmed_code = str(existing_code.value) if existing_code else None
+            if "without contrast" in normalized or "no contrast" in normalized:
+                confirmed_code = "73721"
+            elif "with contrast" in normalized:
+                confirmed_code = "73722"
+            self.procedure_resolution = self.knowledge_agent.propose_procedure(
+                str(procedure), confirmed_code=confirmed_code
+            )
+            if not self.procedure_resolution.needs_confirmation:
+                self.record_fact(DecisionFact("procedure_code", self.procedure_resolution.code,
+                                               "procedure_catalog", procedure_fact.observed_at,
+                                               1.0, VerificationStatus.VERIFIED))
+        required = {
+            "requested_procedure": "What care or procedure are you trying to arrange?",
+            "service_date": "What date do you expect to receive this care?",
+            "coverage_end_date": "When does your current coverage end?",
+        }
+        missing = [name for name in required if name not in self.workflow.care_state.facts]
+        questions = [required[name] for name in missing]
+        if self.procedure_resolution is not None and self.procedure_resolution.needs_confirmation:
+            missing.append("procedure_code_confirmation")
+            questions.append("Should this be an MRI knee without contrast or with contrast?")
+        self.onboarding_missing = tuple(missing)
+        self.onboarding_questions = tuple(questions)
+        self.audit.append(self.journey_id, "onboarding_completed", actor="onboarding_agent",
+                          payload={"source": source, "fact_count": len(proposal.facts)})
+        return proposal
+
+    def record_consent(self, action: ConsentAction, *, approved: bool, scope: str, actor: str = "synthetic-user") -> None:
+        self.workflow.care_state.record_consent(action, approved=approved, scope=scope, actor=actor)
+        self.audit.append(self.journey_id, "consent_recorded", actor=actor, payload={"action": action.value, "approved": approved, "scope": scope})
+
+    def compare(self, plan_ids: list[str], provider_id: str = "dr-lee") -> list[PathEvaluation]:
+        if self.stage != WorkflowStage.COMPARE:
+            raise RuntimeError("comparison is only available in compare stage")
+        request = self.matching_agent.request_evaluation(plan_ids, provider_id=provider_id)
+        provider = self.catalogs.provider(request.provider_id)
+        self.evaluations = rank([evaluate(self.catalogs.plan(plan_id), provider) for plan_id in request.plan_ids])
+        self.audit.append(self.journey_id, "matching_requested", actor="matching_agent",
+                          payload={"plan_ids": list(request.plan_ids), "provider_id": request.provider_id})
+        self.audit.append(self.journey_id, "evaluation_completed", actor="engine",
+                          payload={"evaluation_count": len(self.evaluations),
+                                   "feasible_count": sum(item.feasible for item in self.evaluations)})
+        return self.evaluations
+
+    def explain_matching(self, question: str = "Why did these care paths pass or fail?") -> str:
+        """Optional model explanation; never required for deterministic comparison."""
+        if not self.evaluations:
+            raise RuntimeError("comparison must run before matching explanation")
+        self.matching_reason = self.matching_agent.reason_about_evaluation(self.evaluations, question=question)
+        self.audit.append(self.journey_id, "matching_explanation_completed", actor="matching_agent",
+                          payload={"model_backed": True, "evaluation_count": len(self.evaluations)})
+        return self.matching_reason
+
+    def advance(self) -> WorkflowStage:
+        next_stage = self.workflow.advance()
+        self.audit.append(self.journey_id, "stage_advanced", actor="engine", payload={"stage": next_stage.value})
+        return next_stage
+
+    def execute(self, action: ConsentAction, scope: str, idempotency_key: str) -> ActionReceipt:
+        if not self.workflow.care_state.has_consent(action, scope):
+            raise RuntimeError(f"{action.value} approval is required")
+        expected_stage = {
+            ConsentAction.ENROLL_PLAN: WorkflowStage.ENROLL,
+            ConsentAction.TRANSITION_COVERAGE: WorkflowStage.TRANSITION,
+            ConsentAction.SHARE_WITH_PROVIDER: WorkflowStage.VERIFY,
+            ConsentAction.BOOK_APPOINTMENT: WorkflowStage.BOOK,
+        }.get(action)
+        if expected_stage is not None and self.stage != expected_stage:
+            raise RuntimeError(f"{action.value} is not allowed in {self.stage.value} stage")
+        if action == ConsentAction.TRANSITION_COVERAGE:
+            required = {"new_effective_date", "first_premium_confirmed"}
+            missing = sorted(required - self.workflow.care_state.facts.keys())
+            if missing:
+                raise RuntimeError(f"coverage transition prerequisites missing: {', '.join(missing)}")
+        receipt = self.adapters.execute(action.value, self.journey_id, scope, idempotency_key)
+        if not any(item.idempotency_key == idempotency_key for item in self.receipts):
+            self.receipts.append(receipt)
+        self.audit.append(self.journey_id, "sandbox_receipt", actor="adapter", payload={"action": action.value, "status": receipt.status, "idempotency_key": idempotency_key})
+        return receipt

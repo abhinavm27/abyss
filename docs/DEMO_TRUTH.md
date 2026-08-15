@@ -1,4 +1,4 @@
-# Demo truth and fallback rules
+# VELA demo truth and fallback rules
 
 ## Working
 
@@ -20,10 +20,9 @@
 - that sandbox enrollment changed real insurance
 - that a sandbox booking reserved a real clinical appointment
 - that an estimate is a guaranteed patient price
-- that ABYSS made a diagnosis or recommended treatment
+- that VELA made a diagnosis or recommended treatment
 
 ## Final demo state
 
 New sandbox coverage selected, MRI sandbox booking completed, expected annual
 savings quantified, and each material action visibly approved and sourced.
-

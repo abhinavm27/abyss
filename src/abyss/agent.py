@@ -1,0 +1,165 @@
+"""Hermes adapter for explanations grounded in ABYSS-computed evidence."""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import UTC, datetime
+from typing import Any
+
+from .domain import ConsentAction, DecisionFact, VerificationStatus
+from .hermes_client import HermesClient
+
+SYSTEM_PROMPT = """You are Hermes, the explanation layer inside ABYSS.
+Use only the structured evidence supplied with the question. Never invent,
+recalculate, or guarantee a price, eligibility result, benefit, appointment,
+or coverage change. Clearly distinguish estimates from verified facts. State
+when evidence is missing. Do not provide medical advice. Keep the answer short,
+plain-spoken, and suitable for a non-technical user."""
+
+EXTRACTION_PROMPT = """You are the ABYSS onboarding extraction layer.
+Extract only facts explicitly present in the supplied synthetic text. Return
+JSON with exactly one top-level key, facts. Each fact must contain name,
+value, source, confidence, and observed_at. Do not decide eligibility, cost,
+network status, or consent. Use these exact names when applicable:
+requested_procedure, service_date, coverage_end_date, contrast_status.
+Do not provide medical advice."""
+
+
+class AgentOutputError(ValueError):
+    """The model returned output that is not safe to use."""
+
+
+def _explicit_intake_fallback(
+    text: str, *, source: str, observed_at: datetime
+) -> list[DecisionFact]:
+    """Recover only narrow, explicit seeded facts when model JSON is unusable."""
+    lowered = " ".join(text.lower().split())
+    normalized = lowered.replace("-", " ")
+    values: list[tuple[str, Any]] = []
+    if "mri" in normalized and "knee" in normalized:
+        procedure = "MRI knee"
+        if "without contrast" in normalized or "no contrast" in normalized:
+            procedure += " without contrast"
+        elif "with contrast" in normalized:
+            procedure += " with contrast"
+        values.append(("requested_procedure", procedure))
+
+    iso_dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)
+    month_pattern = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?"
+    natural_dates = re.findall(rf"\b{month_pattern}\b", lowered)
+    coverage_match = re.search(
+        r"(?:coverage|plan)\s+(?:ends?|end(?:s|ing)?(?:\s+date)?(?:\s+is)?)\s+(\d{4}-\d{2}-\d{2})",
+        lowered,
+    )
+    service_match = re.search(
+        rf"(?:service|care|appointment)\s+date(?:\s+is)?\s+(\d{{4}}-\d{{2}}-\d{{2}}|{month_pattern})",
+        lowered,
+    )
+    natural_coverage_match = re.search(
+        rf"(?:coverage|plan)\s+(?:ends?|end(?:s|ing)?(?:\s+date)?(?:\s+is)?)\s+({month_pattern})",
+        lowered,
+    )
+    coverage_date = coverage_match.group(1) if coverage_match else None
+    if not coverage_date and natural_coverage_match:
+        coverage_date = natural_coverage_match.group(1)
+    service_date = service_match.group(1) if service_match else None
+    if not service_date:
+        service_date = next((value for value in iso_dates if value != coverage_date), None)
+    if not service_date:
+        service_date = next((value for value in natural_dates if value != coverage_date), None)
+    if service_date:
+        values.append(("service_date", service_date))
+    if coverage_date:
+        values.append(("coverage_end_date", coverage_date))
+    if "without contrast" in normalized or "no contrast" in normalized:
+        values.append(("contrast_status", "without contrast"))
+    elif "with contrast" in normalized:
+        values.append(("contrast_status", "with contrast"))
+
+    return [
+        DecisionFact(
+            name=name,
+            value=value,
+            source=source,
+            observed_at=observed_at,
+            confidence=1.0,
+            verification_status=VerificationStatus.SOURCE_BACKED,
+            consent_required=ConsentAction.PROCESS_DOCUMENTS,
+        )
+        for name, value in values
+    ]
+
+
+def explain(question: str, evidence: dict[str, Any], client: HermesClient | None = None) -> str:
+    """Explain evidence without delegating calculations or decisions to the model."""
+    if not question.strip():
+        raise ValueError("question is required")
+    hermes = client or HermesClient()
+    return hermes.chat(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {question.strip()}\n\n"
+                    "ABYSS evidence (authoritative JSON):\n"
+                    f"{json.dumps(evidence, sort_keys=True, separators=(',', ':'))}"
+                ),
+            },
+        ],
+        max_tokens=320,
+        temperature=0.0,
+    )
+
+
+def extract_facts(text: str, *, source: str, observed_at: datetime | None = None,
+                  client: HermesClient | None = None) -> list[DecisionFact]:
+    """Extract candidate facts; deterministic validation makes them usable."""
+    if not text.strip() or not source.strip():
+        raise ValueError("text and source are required")
+    timestamp = observed_at or datetime.now(UTC)
+    hermes = client or HermesClient()
+    raw = hermes.chat([
+        {"role": "system", "content": EXTRACTION_PROMPT},
+        {"role": "user", "content": f"Source: {source}\nSynthetic text:\n{text.strip()}"},
+    ], max_tokens=500, temperature=0.0)
+    try:
+        candidate = raw.strip()
+        if not candidate.startswith("{"):
+            start, end = candidate.find("{"), candidate.rfind("}")
+            if start < 0 or end <= start:
+                raise json.JSONDecodeError("JSON object not found", candidate, 0)
+            candidate = candidate[start:end + 1]
+        payload = json.loads(candidate)
+        entries = payload["facts"]
+        if not isinstance(entries, list):
+            raise TypeError
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        fallback = _explicit_intake_fallback(text, source=source, observed_at=timestamp)
+        if fallback:
+            return fallback
+        raise AgentOutputError("Hermes extraction did not return the required JSON schema") from error
+    facts: list[DecisionFact] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) - {"name", "value", "source", "confidence", "observed_at"}:
+            raise AgentOutputError("Hermes extraction contains unknown or malformed fields")
+        try:
+            facts.append(DecisionFact(
+                name=str(entry["name"]), value=entry["value"], source=source,
+                # Provenance time belongs to the orchestrator, never the model.
+                # The model field is accepted for schema compatibility but is
+                # intentionally not trusted as the ledger timestamp.
+                observed_at=timestamp,
+                confidence=float(entry["confidence"]), verification_status=VerificationStatus.INFERRED,
+                consent_required=ConsentAction.PROCESS_DOCUMENTS,
+            ))
+        except (KeyError, TypeError, ValueError) as error:
+            fallback = _explicit_intake_fallback(text, source=source, observed_at=timestamp)
+            if fallback:
+                return fallback
+            raise AgentOutputError("Hermes extraction contains an invalid fact") from error
+    explicit = _explicit_intake_fallback(text, source=source, observed_at=timestamp)
+    names = {fact.name for fact in facts}
+    facts.extend(fact for fact in explicit if fact.name not in names)
+    return facts

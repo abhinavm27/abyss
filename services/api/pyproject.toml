@@ -1,0 +1,36 @@
+[project]
+name = "abyss-backend"
+version = "0.1.0"
+description = "VELA healthcare action system API, ingestion, and estimation service"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "ijson>=3.3",
+    "pydantic>=2.9",
+    "google-genai>=1.0",      # temporary legacy voice and document adapter
+    "pdfplumber>=0.11",       # text out of Summary of Benefits PDFs
+    "python-multipart>=0.0.9",  # FastAPI file uploads (SBC)
+    "truststore>=0.9",        # use the OS trust store, as curl does
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+abyss-ingest = "app.ingest.cli:main"
+abyss-qhp = "app.ingest.qhp_cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

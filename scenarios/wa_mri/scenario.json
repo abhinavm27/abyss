@@ -1,0 +1,16 @@
+{
+  "id": "wa-mri-weekend-demo",
+  "state": "WA",
+  "procedure": {"name": "MRI knee without contrast", "cpt": "73721"},
+  "plans": [
+    {"id": "current", "name": "Current plan", "eligible": true},
+    {"id": "wa-silver", "name": "Washington Silver alternative", "eligible": true},
+    {"id": "wa-gold", "name": "Washington Gold alternative", "eligible": true}
+  ],
+  "providers": [
+    {"id": "sea-imaging", "name": "Seattle Imaging Center"},
+    {"id": "lake-clinic", "name": "Lake Washington Clinic"},
+    {"id": "sound-radiology", "name": "Puget Sound Radiology"}
+  ],
+  "synthetic": true
+}
