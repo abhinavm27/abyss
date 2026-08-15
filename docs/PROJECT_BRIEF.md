@@ -1,11 +1,11 @@
-# Project brief
+# VELA project brief
 
 ## Product promise
 
 From “I need care” to “your appointment is booked” through one understandable,
 permissioned workflow.
 
-ABYSS evaluates current insurance, compares eligible alternatives, identifies the
+VELA evaluates current insurance, compares eligible alternatives, identifies the
 lowest-total-cost path to care, and—with explicit consent—coordinates sandboxed
 coverage enrollment, provider verification, and appointment booking.
 
@@ -56,4 +56,3 @@ The cheapest MRI price is not necessarily the cheapest complete healthcare path.
 - Saturday night: intelligence, consent, voice, and booking integrated
 - Sunday morning: feature freeze; reliability and visual clarity only
 - Judging: three clean rehearsals and an identical fallback recording
-

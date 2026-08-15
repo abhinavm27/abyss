@@ -24,7 +24,7 @@ from .ingest import sbc
 from .estimator import Plan, estimate
 from .ws import voice_endpoint
 
-app = FastAPI(title="ABYSS", version="0.1.0")
+app = FastAPI(title="VELA", version="0.1.0")
 
 # The journey store is intentionally process-local for the sandbox demo. A
 # production deployment would persist the same events and receipts in the
@@ -255,7 +255,7 @@ def action_journey(journey_id: str, body: JourneyActionIn, user_id: int = Depend
 
 @app.post("/api/agent/chat")
 def agent_chat(body: AgentChatIn, user_id: int = Depends(require_user)):
-    """Have GN100-hosted Hermes explain an authoritative ABYSS result."""
+    """Have GN100-hosted Hermes explain an authoritative VELA result."""
     try:
         return {"reply": explain(body.question, body.evidence)}
     except HermesError as exc:

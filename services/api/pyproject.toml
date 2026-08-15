@@ -1,7 +1,7 @@
 [project]
 name = "abyss-backend"
 version = "0.1.0"
-description = "Voice-first healthcare price transparency — ingest, estimation, and API"
+description = "VELA healthcare action system API, ingestion, and estimation service"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

@@ -70,6 +70,9 @@ export function Home({
   onAsk,
   onOpenPlan,
   onOpen,
+  onOpenJourney,
+  onOpenAdmin,
+  onOpenChatLab,
 }: {
   /** Bumped when the plan changes elsewhere. This screen is never unmounted, so
    *  without it the deductible ring would keep showing a stale figure. */

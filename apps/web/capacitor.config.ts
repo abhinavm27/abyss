@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.curevoz.abyss",
-  appName: "ABYSS",
+  appName: "VELA",
   webDir: "dist",
   server: {
     androidScheme: "https",

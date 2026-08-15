@@ -1,4 +1,4 @@
-import { Activity, ArrowRight, CheckCircle2, CircleAlert, Clock3, Database, Gauge, ShieldCheck } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, CircleAlert, Database, Gauge, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type CareJourneySnapshot } from "@/lib/api";
 

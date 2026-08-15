@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "abyss-health-navigation"
 version = "0.1.0"
-description = "Permissioned healthcare-navigation prototype for NVIDIA Spark Hack Seattle"
+description = "Consent controlled healthcare action system for NVIDIA Spark Hack Seattle"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -29,4 +29,3 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-

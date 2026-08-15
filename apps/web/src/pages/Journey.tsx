@@ -23,8 +23,7 @@ export function Journey({ onBack }: { onBack: () => void }) {
 
   async function start() {
     const started = await api.startJourney();
-    const consented = await api.journeyConsent(started.journey_id, { action: "process_documents", scope: "synthetic request and documents", approved: true });
-    setSnapshot(consented);
+    return api.journeyConsent(started.journey_id, { action: "process_documents", scope: "synthetic request and documents", approved: true });
   }
 
   async function submitAnswer() {
