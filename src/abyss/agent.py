@@ -139,7 +139,7 @@ def extract_facts(text: str, *, source: str, observed_at: datetime | None = None
         raise ValueError("text and source are required")
     timestamp = observed_at or datetime.now(UTC)
     hermes = client or HermesClient()
-    raw = hermes.chat([
+    messages = [
         {"role": "system", "content": EXTRACTION_PROMPT},
         {"role": "user", "content": (
             f"Source: {source}\n"
@@ -147,7 +147,8 @@ def extract_facts(text: str, *, source: str, observed_at: datetime | None = None
             f"{json.dumps(context or {}, separators=(',', ':'), default=str)}\n"
             f"Latest user text:\n{text.strip()}"
         )},
-    ], max_tokens=500, temperature=0.0)
+    ]
+    raw = hermes.chat(messages, max_tokens=500, temperature=0.0)
     try:
         candidate = raw.strip()
         if not candidate.startswith("{"):
@@ -163,7 +164,30 @@ def extract_facts(text: str, *, source: str, observed_at: datetime | None = None
         fallback = _explicit_intake_fallback(text, source=source, observed_at=timestamp)
         if fallback:
             return fallback
-        raise AgentOutputError("Hermes extraction did not return the required JSON schema") from error
+        # One bounded correction gives a model that wrapped or omitted JSON a
+        # chance to comply. The corrected output is still treated as untrusted
+        # and goes through the exact same schema and DecisionFact validation.
+        corrected = hermes.chat(messages + [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": (
+                "Your response did not match the required schema. Return only "
+                "a JSON object with exactly one top-level facts array. Each "
+                "fact must contain name, value, source, confidence, and observed_at."
+            )},
+        ], max_tokens=500, temperature=0.0)
+        try:
+            candidate = corrected.strip()
+            if not candidate.startswith("{"):
+                start, end = candidate.find("{"), candidate.rfind("}")
+                if start < 0 or end <= start:
+                    raise json.JSONDecodeError("JSON object not found", candidate, 0)
+                candidate = candidate[start:end + 1]
+            payload = json.loads(candidate)
+            entries = payload["facts"]
+            if not isinstance(entries, list):
+                raise TypeError
+        except (json.JSONDecodeError, KeyError, TypeError) as retry_error:
+            raise AgentOutputError("Hermes extraction did not return the required JSON schema") from retry_error
     facts: list[DecisionFact] = []
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) - {"name", "value", "source", "confidence", "observed_at"}:

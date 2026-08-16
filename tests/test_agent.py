@@ -113,6 +113,35 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(by_name["service_date"], "aug 30")
         self.assertEqual(by_name["coverage_end_date"], "sept 30")
 
+    def test_extraction_retries_once_with_schema_feedback(self):
+        class CorrectingHermes(FakeHermes):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def chat(self, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return "I need to think about that."
+                self.messages = messages
+                return json.dumps({"facts": [{
+                    "name": "requested_procedure",
+                    "value": "complete abdominal ultrasound",
+                    "source": "user_request",
+                    "confidence": 0.9,
+                    "observed_at": "2026-08-15T12:00:00Z",
+                }]})
+
+        client = CorrectingHermes()
+        facts = extract_facts(
+            "complete abdominal ultrasound",
+            source="user_request",
+            client=client,
+        )
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(facts[0].value, "complete abdominal ultrasound")
+        self.assertIn("required schema", client.messages[-1]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

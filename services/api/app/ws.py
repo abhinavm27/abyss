@@ -31,7 +31,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 
 from . import auth, db, retrieval
 from .ingest import qhp
@@ -446,6 +446,19 @@ async def voice_endpoint(
         await _stream_magpie(ws, speech, reply)
         await ws.send_json({"type": "turn_complete"})
 
+    async def process_turn_safely(text: str, turn_id: str) -> None:
+        """Keep a recoverable agent-turn failure from ending the voice session."""
+        try:
+            await process_turn(text, turn_id)
+        except HTTPException as exc:
+            detail = str(exc.detail)
+            log.warning("voice turn rejected: %s", detail)
+            await ws.send_json({
+                "type": "turn_error", "message": detail, "recoverable": True,
+                "utterance_id": turn_id, "session_id": session_id,
+            })
+            await ws.send_json({"type": "turn_complete"})
+
     try:
         await ws.send_json({
             "type": "ready",
@@ -482,11 +495,20 @@ async def voice_endpoint(
                     await ws.send_json({"type": "turn_complete"})
                     continue
                 await ws.send_json({"type": "processing", "stage": "transcribing"})
-                text = await asyncio.to_thread(speech.transcribe_pcm, bytes(pcm))
+                try:
+                    text = await asyncio.to_thread(speech.transcribe_pcm, bytes(pcm))
+                except NvidiaSpeechError as exc:
+                    pcm.clear()
+                    await ws.send_json({
+                        "type": "turn_error", "message": str(exc), "recoverable": True,
+                        "utterance_id": turn_id, "session_id": session_id,
+                    })
+                    await ws.send_json({"type": "turn_complete"})
+                    continue
                 pcm.clear()
-                await process_turn(text, turn_id)
+                await process_turn_safely(text, turn_id)
             elif kind == "text" and msg.get("text"):
-                await process_turn(
+                await process_turn_safely(
                     str(msg["text"]), f"utterance-{uuid.uuid4().hex[:12]}"
                 )
     except WebSocketDisconnect:

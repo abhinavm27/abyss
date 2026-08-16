@@ -200,17 +200,23 @@ CREATE INDEX IF NOT EXISTS idx_care_journey_user
   ON care_journey(user_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS care_agent_trace (
-  correlation_id TEXT PRIMARY KEY,
-  utterance_id   TEXT NOT NULL,
+  utterance_id   TEXT PRIMARY KEY,
+  correlation_id TEXT NOT NULL,
   user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
   journey_id     TEXT,
   intent         TEXT NOT NULL,
   plan_json      TEXT NOT NULL,
   message        TEXT NOT NULL,
-  created_at     TEXT NOT NULL
+  channel        TEXT NOT NULL DEFAULT 'chat',
+  status         TEXT NOT NULL DEFAULT 'completed',
+  error          TEXT,
+  created_at     TEXT NOT NULL,
+  completed_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_care_agent_trace_user
   ON care_agent_trace(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_care_agent_trace_correlation
+  ON care_agent_trace(correlation_id, created_at);
 """
 
 
@@ -264,6 +270,48 @@ def migrate(conn: sqlite3.Connection) -> None:
         for name, decl in columns:
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    trace_columns = {
+        row["name"]: row for row in conn.execute("PRAGMA table_info(care_agent_trace)")
+    }
+    # Early builds made correlation_id the primary key. A voice session uses
+    # one correlation ID for many utterances, so the second turn collided with
+    # the first. Rebuild once with utterance_id as the per-turn identity while
+    # preserving every existing trace.
+    utterance_column = trace_columns.get("utterance_id")
+    if trace_columns and (
+        utterance_column is None or utterance_column["pk"] != 1
+        or "channel" not in trace_columns
+        or "status" not in trace_columns
+    ):
+        conn.executescript("""
+            CREATE TABLE care_agent_trace_next (
+              utterance_id   TEXT PRIMARY KEY,
+              correlation_id TEXT NOT NULL,
+              user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+              journey_id     TEXT,
+              intent         TEXT NOT NULL,
+              plan_json      TEXT NOT NULL,
+              message        TEXT NOT NULL,
+              channel        TEXT NOT NULL DEFAULT 'chat',
+              status         TEXT NOT NULL DEFAULT 'completed',
+              error          TEXT,
+              created_at     TEXT NOT NULL,
+              completed_at   TEXT
+            );
+            INSERT OR IGNORE INTO care_agent_trace_next
+              (utterance_id,correlation_id,user_id,journey_id,intent,plan_json,
+               message,channel,status,error,created_at,completed_at)
+            SELECT utterance_id,correlation_id,user_id,journey_id,intent,plan_json,
+                   message,'chat','completed',NULL,created_at,created_at
+            FROM care_agent_trace;
+            DROP TABLE care_agent_trace;
+            ALTER TABLE care_agent_trace_next RENAME TO care_agent_trace;
+            CREATE INDEX idx_care_agent_trace_user
+              ON care_agent_trace(user_id, created_at DESC);
+            CREATE INDEX idx_care_agent_trace_correlation
+              ON care_agent_trace(correlation_id, created_at);
+        """)
 
     # The rows left behind by the booking feature that was removed are not real
     # appointments — they are the fabricated fixed slot it invented. Now that
