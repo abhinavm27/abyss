@@ -356,6 +356,9 @@ export interface CareJourneySnapshot {
     consent_scope: string;
   } | null;
   booking_consent_scope: string | null;
+  cancellation_consent_scope?: string | null;
+  reschedule_original_slot?: CareJourneySnapshot["selected_booking_slot"];
+  reschedule_pending?: boolean;
   booking_tasks: {
     task_id: string;
     slot_id: string;
@@ -388,6 +391,69 @@ export interface CareJourneySnapshot {
     payload: Record<string, unknown>;
     recorded_at: string;
   }[];
+  facts?: {
+    name: string;
+    value: unknown;
+    source: string;
+    observed_at: string;
+    confidence: number;
+    verification_status: string;
+    consent_requirement: string | null;
+  }[];
+}
+
+export interface CareContextJourney {
+  journey_id: string;
+  title: string;
+  stage: string;
+  status: "active" | "complete" | string;
+  selected_care_path: CareJourneySnapshot["selected_care_path"];
+  pending_fields: string[];
+  pending_questions: string[];
+  intake_facts: Record<string, { value: unknown; source: string; verification_status: string }>;
+  updated_at: string;
+}
+
+export interface CareContextAppointment {
+  appointment_id: string;
+  journey_id: string;
+  slot_id: string;
+  hospital_id: number | null;
+  code: string | null;
+  description: string | null;
+  booked_for: string | null;
+  status: string;
+  source: string;
+  updated_at: string;
+}
+
+export interface CareContext {
+  user: { user_id: string };
+  current_plan: { plan_id: number; label: string | null; payer_name: string | null; is_active: boolean } | null;
+  journeys: CareContextJourney[];
+  appointments: CareContextAppointment[];
+  scheduled_tasks: CareJourneySnapshot["booking_tasks"];
+}
+
+export interface CareAgentPlan {
+  intent: string;
+  correlation_id: string;
+  utterance_id: string;
+  target_journey_id: string | null;
+  target_appointment_id: string | null;
+  steps: string[];
+  reuse: string[];
+  refresh: string[];
+  missing: string[];
+  source: string;
+  confidence: number;
+}
+
+export interface CareAgentResponse {
+  reply: string;
+  plan: CareAgentPlan;
+  journey: CareJourneySnapshot | null;
+  context: CareContext;
 }
 
 /** A question that has already been asked, offered again on the home screen. */
@@ -562,6 +628,14 @@ export const api = {
       body: JSON.stringify({ question, evidence }),
     }),
 
+  careContext: () => req<CareContext>("/api/care-context"),
+
+  careAgentMessage: (text: string, activeJourneyId?: string | null) =>
+    req<CareAgentResponse>("/api/care-agent/messages", {
+      method: "POST",
+      body: JSON.stringify({ text, active_journey_id: activeJourneyId ?? null }),
+    }),
+
   startJourney: (body?: { procedure?: string; provider?: string; facility?: string }) =>
     req<CareJourneySnapshot>("/api/journeys", {
       method: "POST",
@@ -603,6 +677,12 @@ export const api = {
   journeySelectBookingSlot: (journeyId: string, slotId: string) =>
     req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/booking/slots/${encodeURIComponent(slotId)}/select`, {
       method: "POST",
+    }),
+
+  journeyReschedule: (journeyId: string, body: { booking_scope: string; cancellation_scope: string; idempotency_key: string }) =>
+    req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/reschedule`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 
   journeyMatchingReason: (journeyId: string, question?: string) =>

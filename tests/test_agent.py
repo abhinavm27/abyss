@@ -66,6 +66,23 @@ class AgentTests(unittest.TestCase):
         facts = extract_facts("Service date is 2026-09-04", source="user_request", client=FencedHermes())
         self.assertEqual(facts[0].name, "service_date")
 
+    def test_extraction_normalizes_common_model_confidence_encodings(self):
+        class LabeledConfidenceHermes(FakeHermes):
+            def chat(self, messages, **kwargs):
+                return json.dumps({"facts": [
+                    {"name": "requested_procedure", "value": "CBC with differential", "confidence": "high"},
+                    {"name": "service_date", "value": "2026-08-30", "confidence": "95%"},
+                ]})
+
+        facts = extract_facts(
+            "CBC with differential on 2026-08-30",
+            source="user_request",
+            client=LabeledConfidenceHermes(),
+        )
+        by_name = {fact.name: fact.confidence for fact in facts}
+        self.assertEqual(by_name["requested_procedure"], 0.9)
+        self.assertEqual(by_name["service_date"], 0.95)
+
     def test_extraction_recovers_only_explicit_seeded_facts_from_bad_model_output(self):
         class BrokenHermes(FakeHermes):
             def chat(self, messages, **kwargs):

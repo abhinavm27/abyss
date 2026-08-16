@@ -20,7 +20,8 @@ plain-spoken, and suitable for a non-technical user."""
 EXTRACTION_PROMPT = """You are the ABYSS onboarding extraction layer.
 Extract only facts explicitly present in the supplied synthetic text. Return
 JSON with exactly one top-level key, facts. Each fact must contain name,
-value, source, confidence, and observed_at. Do not decide eligibility, cost,
+value, source, confidence, and observed_at. confidence must be a number from
+0.0 through 1.0. Do not decide eligibility, cost,
 network status, or consent. Use these exact names when applicable:
 requested_procedure, service_date, coverage_end_date, contrast_status.
 When existing intake facts are supplied, treat the latest text as the next turn
@@ -33,6 +34,18 @@ Do not provide medical advice."""
 
 class AgentOutputError(ValueError):
     """The model returned output that is not safe to use."""
+
+
+def _confidence_value(value: Any) -> float:
+    """Normalize common model confidence encodings into the ledger contract."""
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        labels = {"high": 0.9, "medium": 0.6, "moderate": 0.6, "low": 0.3}
+        if normalized in labels:
+            return labels[normalized]
+        if normalized.endswith("%"):
+            return float(normalized[:-1]) / 100.0
+    return float(value)
 
 
 def _explicit_intake_fallback(
@@ -162,7 +175,7 @@ def extract_facts(text: str, *, source: str, observed_at: datetime | None = None
                 # The model field is accepted for schema compatibility but is
                 # intentionally not trusted as the ledger timestamp.
                 observed_at=timestamp,
-                confidence=float(entry["confidence"]), verification_status=VerificationStatus.INFERRED,
+                confidence=_confidence_value(entry["confidence"]), verification_status=VerificationStatus.INFERRED,
                 consent_required=ConsentAction.PROCESS_DOCUMENTS,
             ))
         except (KeyError, TypeError, ValueError) as error:
