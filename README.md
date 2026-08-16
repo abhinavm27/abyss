@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/abhinavm27/abyss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/abhinavm27/abyss/actions/workflows/ci.yml)
 
-VELA is a consent-controlled healthcare action system built for the NVIDIA Spark Hack Series in Seattle. It turns a care request and insurance evidence into a source-backed care path, compares feasible coverage options, and executes controlled sandbox actions only after the user gives exact consent.
+VELA is a voice-first, consent-controlled healthcare action system built for the NVIDIA Spark Hack Series in Seattle. It connects three complete journeys: an NVIDIA-powered voice conversation, an insurance decision and coverage transition, and appointment booking or rescheduling. Every consequential action remains behind exact user consent.
 
 VELA is a **Do Track** prototype. It demonstrates an end-to-end workflow; it does not provide medical advice, act as a licensed insurance broker, guarantee prices, perform production enrollment, cancel real coverage, or reserve a real clinical appointment. All demo identities and records are seeded synthetic data.
 
@@ -13,43 +13,65 @@ VELA is a **Do Track** prototype. It demonstrates an end-to-end workflow; it doe
 | Question | Answer |
 | --- | --- |
 | What problem does VELA solve? | Patients should not have to coordinate insurance, provider search, cost comparison, consent, and scheduling alone. |
-| What does it complete? | One conversational request becomes a sourced care-path comparison, an explicit user decision, and consent-gated sandbox actions with receipts. |
+| What does it complete? | A live voice request becomes an insurance decision, a controlled coverage transition, and a sandbox appointment with persistent receipts. |
 | What is technically different? | NVIDIA Nemotron handles language-heavy work. Deterministic code owns eligibility, cost, network constraints, ranking, consent, and action authorization. |
 | Why NVIDIA? | Local inference on GB10 keeps the model, retrieval context, documents, and workflow state inside one controlled system. NemoClaw, OpenShell, and Hermes govern model access and execution. |
-| What proves it works? | A reproducible Washington MRI journey, deterministic and vertical-slice tests, explicit consent records, idempotent receipts, and a responsive interface with recovery behavior. |
+| What proves it works? | A reproducible Washington MRI journey, a live Parakeet-to-Nemotron-to-Magpie voice path, explicit consent records, idempotent booking receipts, and deterministic and vertical-slice tests. |
 
 VELA targets the **Nemotron Lightning** and **NemoClaw and OpenShell** bounties.
 
-### Working with controlled inputs
+## Three complete product journeys
 
-- Conversational voice and text intake
-- Synthetic insurance-card and referral processing
-- Personal Care Twin fact and memory state
-- Three-path expected annual-cost comparison
-- Eligibility, medication, physician, provider, and network constraints
-- Source, timestamp, confidence, verification, and consent metadata for material facts
-- Exact-scope consent records and an auditable journey history
+### 1. Voice-first care navigation
 
-### Controlled or sandboxed external actions
+VELA provides a persistent, bidirectional voice experience rather than a speech-to-text shortcut:
 
-- Provider verification through a controlled adapter, supervised call, or clearly labeled recording
-- Plan enrollment submission
-- Existing-coverage transition
-- Appointment booking
+1. The browser streams 16 kHz microphone audio over the authenticated WebSocket.
+2. **NVIDIA Parakeet** transcribes the utterance.
+3. The Care Journey Agent routes the transcript through **Hermes/Nemotron** and the deterministic workflow.
+4. VELA returns grounded text, journey-state updates, and interface events.
+5. **NVIDIA Magpie** synthesizes the approved response and streams 22.05 kHz audio back to the browser.
 
-A sandbox receipt proves that the VELA workflow and adapter executed. It does not prove that an insurer or provider changed a real external record.
+Voice sessions include proactive prompts, visible listening/transcribing/thinking/speaking states, persisted transcripts, correlation IDs, safe recovery, and a typed-chat fallback. Nemotron may interpret and explain language; it cannot authorize an action or change a deterministic result.
 
-## Golden journey
+### 2. Insurance decision and coverage transition
 
-The judged scenario follows a fictional Washington resident who recently lost employer coverage and needs a non-emergency knee MRI. VELA:
+VELA turns insurance evidence into a decision the user can inspect:
 
-1. Collects the request and synthetic insurance evidence.
-2. Resolves missing or ambiguous facts without guessing.
-3. Compares continuation coverage with two eligible Washington alternatives.
-4. Enforces medication, physician, provider, network, and effective-date constraints.
-5. Selects the lowest expected annual-cost feasible path.
-6. Requests separate consent for enrollment, transition, provider disclosure, and booking.
-7. Completes controlled sandbox actions and records idempotent receipts.
+- Processes synthetic insurance-card images, Summary of Benefits and Coverage documents, and referrals.
+- Records material facts with source, timestamp, confidence, verification status, and consent requirements.
+- Supports conversational plan discovery and plan-comparison requests.
+- Compares continuation coverage with two Washington alternatives in the golden scenario.
+- Applies deterministic Special Enrollment, medication, physician, provider, network, effective-date, and annual-cost rules.
+- Shows infeasible paths and rejection reasons instead of hiding them.
+- Requires separate exact consent for sandbox enrollment and coverage transition.
+- Prevents old coverage from ending until the replacement effective date and first-premium conditions are confirmed.
+
+### 3. Appointment booking and rescheduling
+
+VELA continues beyond the coverage decision into a consent-controlled scheduling workflow:
+
+- Verifies the selected provider through a controlled adapter, supervised call, or clearly labeled recording.
+- Collects scheduling preferences and returns matching synthetic appointment slots.
+- Binds exact booking consent to the selected plan, provider, facility, date, and time.
+- Persists the appointment and an idempotent sandbox receipt across refreshes.
+- Supports bounded retries when the booking adapter reports a transient failure.
+- Reschedules safely by confirming the replacement before cancelling the original appointment, with separate consent for both actions.
+
+### How the journeys connect
+
+The judged path follows a fictional Washington resident who recently lost employer coverage and needs a non-emergency knee MRI:
+
+```text
+voice request
+-> insurance and referral evidence
+-> three-path coverage comparison
+-> lowest-cost feasible path
+-> exact enrollment and transition consent
+-> controlled provider verification
+-> slot selection and exact booking consent
+-> persistent sandbox appointment receipt
+```
 
 Expected annual cost is computed deterministically from:
 
@@ -62,17 +84,21 @@ annual premiums
 
 The cheapest individual procedure is not necessarily the lowest-cost complete care path.
 
+> **Evidence boundary:** A sandbox receipt proves that the VELA workflow and adapter executed. It does not prove that an insurer or provider changed a real external record. Estimates are not guaranteed prices, and controlled provider verification is not a live directory guarantee.
+
 ## System design
 
 ```mermaid
 flowchart LR
     subgraph INPUTS["User channels and evidence"]
-        VOICE["Voice and text intake"]
+        MIC["Browser microphone"]
+        CHAT["Typed chat"]
         CAMERA["Insurance-card scan"]
         PDF["Insurance and referral documents"]
     end
 
     subgraph SPARK["Local NVIDIA GB10 trust boundary"]
+        PARAKEET["NVIDIA Parakeet ASR"]
         GATEWAY["NemoClaw and Hermes gateway"]
         MODEL["NVIDIA Nemotron"]
         EXTRACT["Schema-validated proposals"]
@@ -80,12 +106,16 @@ flowchart LR
         CATALOGS["Controlled plan and provider catalogs"]
         ENGINE["Care Journey Engine"]
         RULES["Deterministic rules and cost math"]
+        RESPONSE["Grounded response"]
+        MAGPIE["NVIDIA Magpie TTS"]
         AUDIT["Redacted audit and receipt ledger"]
 
+        PARAKEET --> GATEWAY
         GATEWAY --> MODEL --> EXTRACT --> LEDGER
         LEDGER --> ENGINE
         CATALOGS --> ENGINE
         ENGINE --> RULES
+        RULES --> RESPONSE --> MAGPIE
         ENGINE --> AUDIT
     end
 
@@ -96,9 +126,12 @@ flowchart LR
         RECOVERY["Block, retry, or operator review"]
     end
 
-    VOICE --> GATEWAY
+    MIC --> PARAKEET
+    CHAT --> GATEWAY
     CAMERA --> EXTRACT
     PDF --> EXTRACT
+    MAGPIE --> SPOKEN["Streamed voice reply"]
+    RESPONSE --> UI["Journey and interface updates"]
     RULES --> CONSENT
     CONSENT -->|"approved"| ADAPTERS
     CONSENT -->|"missing or denied"| RECOVERY
@@ -122,13 +155,24 @@ Model output is untrusted until it passes schema and rule validation. A model ca
 
 ## NVIDIA stack
 
-VELA runs NVIDIA Nemotron locally on an Acer Veriton GN100 powered by NVIDIA GB10. Application model calls use the authenticated NemoClaw Hermes gateway; the application never bypasses that boundary by calling vLLM directly.
+VELA runs its model and speech path on an Acer Veriton GN100 powered by NVIDIA GB10.
+
+| Component | Role in VELA |
+| --- | --- |
+| NVIDIA Parakeet | Local automatic speech recognition for live user audio |
+| NVIDIA Nemotron | Language extraction, classification, normalization, and grounded explanation |
+| NVIDIA Magpie | Streamed speech synthesis for the grounded assistant response |
+| NemoClaw and OpenShell | Policy boundary for controlled model and network execution |
+| Hermes | Authenticated gateway used by every application model call |
+| NVIDIA GB10 | Local compute for inference, speech, retrieval context, and workflow state |
+
+The current reasoning model is:
 
 ```text
 nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
 ```
 
-Local execution keeps inference, retrieval context, document processing, and workflow state within one controlled system. If the model is unavailable or returns invalid output, deterministic evaluation continues where possible and consequential actions fail closed.
+The application never bypasses NemoClaw by calling vLLM directly. Local execution keeps inference, speech, retrieval context, document processing, and workflow state within one controlled system. If a model is unavailable or returns invalid output, deterministic evaluation continues where possible and consequential actions fail closed.
 
 ## Quick start
 
@@ -186,6 +230,10 @@ VITE_DEMO_MODE=true npm --prefix apps/web run dev
 ```
 
 Demo mode uses controlled client-side fixtures. It is not evidence that an external action occurred.
+
+### Full voice runtime
+
+The complete voice path additionally requires the authenticated Hermes gateway, NVIDIA Parakeet ASR, NVIDIA Magpie TTS, and a secure browser context for microphone access. The GN100 endpoints, health checks, deployment order, and local voice tunnel are documented in [`docs/BUILD_AND_DEPLOY_RUNBOOK.md`](docs/BUILD_AND_DEPLOY_RUNBOOK.md).
 
 ## Reproduce the demonstration
 
