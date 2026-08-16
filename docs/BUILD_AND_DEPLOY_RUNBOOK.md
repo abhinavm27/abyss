@@ -1,4 +1,4 @@
-# ABYSS build and deployment runbook
+# VELA build and deployment runbook
 
 This is the required startup and handoff guide for every new coding task. It
 covers the complete ABYSS application deployed on GN100, including the care

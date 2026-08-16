@@ -2,273 +2,247 @@
 
 **Your clearest path to care.**
 
-VELA is a consent controlled healthcare action system built on NVIDIA DGX Spark. It turns a spoken care request and insurance documents into a verified, cost aware care path, then, with the user's explicit approval, takes action to secure the appointment. Under the interface is a multistep agentic workflow combining local reasoning, document retrieval, deterministic matching, cost calculations, tool use, recovery logic, and an auditable record of every consequential action.
+[![CI](https://github.com/abhinavm27/abyss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/abhinavm27/abyss/actions/workflows/ci.yml)
 
-VELA is a submission to the **Do Track** of the NVIDIA Spark Hack Series in Seattle.
+VELA is a consent-controlled healthcare action system built for the NVIDIA Spark Hack Series in Seattle. It turns a care request and insurance evidence into a source-backed care path, compares feasible coverage options, and executes controlled sandbox actions only after the user gives exact consent.
 
-> **Prototype boundary:** VELA does not provide medical advice, act as a licensed insurance broker, guarantee prices, perform production enrollment, cancel real coverage, or reserve a real clinical appointment. The submission uses seeded synthetic data and visibly sandboxed action adapters.
+VELA is a **Do Track** prototype. It demonstrates an end-to-end workflow; it does not provide medical advice, act as a licensed insurance broker, guarantee prices, perform production enrollment, cancel real coverage, or reserve a real clinical appointment. All demo identities and records are seeded synthetic data.
 
-## Why VELA belongs in the Do Track
+## Judge VELA in 60 seconds
 
-VELA does not stop at answering healthcare questions. It orchestrates a long running workflow across voice, documents, insurance data, provider data, cost models, consent gates, and booking tools to accomplish a task a patient would otherwise have to coordinate manually.
+| Question | Answer |
+| --- | --- |
+| What problem does VELA solve? | Patients should not have to coordinate insurance, provider search, cost comparison, consent, and scheduling alone. |
+| What does it complete? | One conversational request becomes a sourced care-path comparison, an explicit user decision, and consent-gated sandbox actions with receipts. |
+| What is technically different? | NVIDIA Nemotron handles language-heavy work. Deterministic code owns eligibility, cost, network constraints, ranking, consent, and action authorization. |
+| Why NVIDIA? | Local inference on GB10 keeps the model, retrieval context, documents, and workflow state inside one controlled system. NemoClaw, OpenShell, and Hermes govern model access and execution. |
+| What proves it works? | A reproducible Washington MRI journey, deterministic and vertical-slice tests, explicit consent records, idempotent receipts, and a responsive interface with recovery behavior. |
 
-The demonstration includes branching logic and safe recovery:
+VELA targets the **Nemotron Lightning** and **NemoClaw and OpenShell** bounties.
 
-- Ambiguous procedures trigger clarification instead of a guessed billing code.
-- Missing or contradictory facts block the workflow instead of creating false certainty.
-- Ineligible or out of network paths remain visible with rejection reasons.
-- Model failure does not alter deterministic eligibility, cost, ranking, or consent rules.
-- Duplicate sandbox action requests are idempotent and return the existing receipt.
-- Enrollment, coverage transition, provider disclosure, and booking require separate exact scope approvals.
+### Working with controlled inputs
 
-## The core loop
+- Conversational voice and text intake
+- Synthetic insurance-card and referral processing
+- Personal Care Twin fact and memory state
+- Three-path expected annual-cost comparison
+- Eligibility, medication, physician, provider, and network constraints
+- Source, timestamp, confidence, verification, and consent metadata for material facts
+- Exact-scope consent records and an auditable journey history
 
-1. A user describes a care need by voice.
-2. VELA prompts the user to scan an insurance card or upload insurance and referral PDFs.
-3. NVIDIA Nemotron, reached through the authenticated Hermes gateway, proposes structured facts from language and documents.
-4. The fact ledger records the value, source, timestamp, confidence, verification state, and consent requirement for every material fact.
-5. Deterministic code evaluates eligibility, provider and medication constraints, and expected annual cost across three care paths.
-6. VELA ranks only feasible paths and explains the result using the engine's authoritative evidence.
-7. The user reviews the proposed action and grants exact consent.
-8. Sandboxed adapters execute enrollment, coverage transition, provider verification, and appointment booking in the permitted sequence.
-9. VELA displays receipts and an audit history that prove what happened.
+### Controlled or sandboxed external actions
 
-## VELA interface
+- Provider verification through a controlled adapter, supervised call, or clearly labeled recording
+- Plan enrollment submission
+- Existing-coverage transition
+- Appointment booking
 
-The React application contains two purpose built responsive compositions backed by the same journey state:
+A sandbox receipt proves that the VELA workflow and adapter executed. It does not prove that an insurer or provider changed a real external record.
 
-- **Website:** a cinematic desktop workspace with persistent navigation, voice or text chat, live agent activity, branching care paths, a verified recommendation, exact consent, and action receipts.
-- **iPhone app:** a native touch composition with live camera and PDF intake, fixed mobile navigation, stacked decision cards, safe area handling, and the same consent controlled journey.
-- **Complete workspace:** Paths, Appointments, Documents, and Preferences are functional responsive screens backed by the existing API contracts, with a synthetic fallback for the public demo.
+## Golden journey
 
-The neural care map begins dormant. Each validated agent handoff reveals more nodes and branches. Once deterministic evaluation selects a feasible route, one cyan path illuminates through the network and remains visible through approval and booking.
+The judged scenario follows a fictional Washington resident who recently lost employer coverage and needs a non-emergency knee MRI. VELA:
 
-The public interface defaults to a synthetic interactive journey. Set `VITE_LIVE_MODE=true` only with the authenticated FastAPI service available. Camera capture uses Capacitor on iOS and `getUserMedia` in supported browsers; PDF and image uploads reuse the existing ingestion APIs.
+1. Collects the request and synthetic insurance evidence.
+2. Resolves missing or ambiguous facts without guessing.
+3. Compares continuation coverage with two eligible Washington alternatives.
+4. Enforces medication, physician, provider, network, and effective-date constraints.
+5. Selects the lowest expected annual-cost feasible path.
+6. Requests separate consent for enrollment, transition, provider disclosure, and booking.
+7. Completes controlled sandbox actions and records idempotent receipts.
 
-## Controlled demo scenario
-
-The golden path follows a fictional Washington resident who recently lost employer coverage and needs a nonemergency knee MRI. VELA compares continuation coverage with two eligible Washington alternatives, preserves a required medication and preferred physician, selects the lowest expected annual cost feasible path, and completes a sandbox appointment booking.
-
-Expected annual cost is calculated as:
+Expected annual cost is computed deterministically from:
 
 ```text
 annual premiums
-+ expected out of pocket care
++ expected out-of-pocket care
 + medication costs
 + remaining deductible exposure
 ```
 
-The cheapest procedure price is not necessarily the cheapest complete care path.
+The cheapest individual procedure is not necessarily the lowest-cost complete care path.
 
-## Architecture
+## System design
 
 ```mermaid
 flowchart LR
     subgraph INPUTS["User channels and evidence"]
-        VOICE["Voice onboarding through Hermes"]
-        CAMERA["Insurance card camera scan"]
-        PDF["Insurance, SBC, and referral PDF upload"]
+        VOICE["Voice and text intake"]
+        CAMERA["Insurance-card scan"]
+        PDF["Insurance and referral documents"]
     end
 
-    subgraph SPARK["Local DGX Spark trust boundary"]
+    subgraph SPARK["Local NVIDIA GB10 trust boundary"]
         GATEWAY["NemoClaw and Hermes gateway"]
-        NEMOTRON["NVIDIA Nemotron"]
-        EXTRACT["Schema validated extraction and intent proposals"]
-        LEDGER["Fact and user memory ledger with provenance"]
-        CATALOGS["Seeded Seattle provider and Washington plan catalogs"]
+        MODEL["NVIDIA Nemotron"]
+        EXTRACT["Schema-validated proposals"]
+        LEDGER["Fact and memory ledger"]
+        CATALOGS["Controlled plan and provider catalogs"]
         ENGINE["Care Journey Engine"]
-        RULES["Deterministic eligibility, network, cost, consent, and state rules"]
-        EXPLAIN["Grounded explanations"]
-        AUDIT["Redacted event and receipt ledger"]
+        RULES["Deterministic rules and cost math"]
+        AUDIT["Redacted audit and receipt ledger"]
 
-        GATEWAY --> NEMOTRON --> EXTRACT
-        EXTRACT --> LEDGER
+        GATEWAY --> MODEL --> EXTRACT --> LEDGER
         LEDGER --> ENGINE
         CATALOGS --> ENGINE
         ENGINE --> RULES
-        RULES --> EXPLAIN
         ENGINE --> AUDIT
     end
 
-    subgraph ACTIONS["Consent controlled sandbox actions"]
-        CONSENT["Exact scope consent gate"]
-        ADAPTERS["Enrollment, transition, provider, and booking adapters"]
-        RECEIPT["Idempotent action receipt"]
-        RECOVERY["Blocked state, retry, or operator review"]
+    subgraph ACTIONS["Consent-controlled actions"]
+        CONSENT["Exact-scope consent"]
+        ADAPTERS["Controlled and sandboxed adapters"]
+        RECEIPT["Idempotent receipt"]
+        RECOVERY["Block, retry, or operator review"]
     end
 
     VOICE --> GATEWAY
     CAMERA --> EXTRACT
     PDF --> EXTRACT
-    EXPLAIN --> CONSENT
+    RULES --> CONSENT
     CONSENT -->|"approved"| ADAPTERS
     CONSENT -->|"missing or denied"| RECOVERY
-    ADAPTERS -->|"success"| RECEIPT
-    ADAPTERS -->|"failure"| RECOVERY
-    RECEIPT --> AUDIT
-    RECOVERY --> AUDIT
+    ADAPTERS -->|"success"| RECEIPT --> AUDIT
+    ADAPTERS -->|"failure"| RECOVERY --> AUDIT
 ```
 
-The model handles language heavy work such as extraction, classification, normalization, summarization, and explanation. Deterministic application code owns arithmetic, eligibility, network constraints, ranking, consent enforcement, state transitions, and action authorization. Model output is never treated as authoritative until it passes schema and rule validation.
+### Decision authority
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, action sequencing, recovery behavior, and the DGX Spark story.
+| Concern | Model-assisted | Deterministic authority |
+| --- | ---: | ---: |
+| Extract and normalize user language | Yes | Validates the schema and accepted values |
+| Classify intent and summarize evidence | Yes | Selects allowed transitions and actions |
+| Calculate expected annual cost | No | Yes |
+| Evaluate eligibility and constraints | No | Yes |
+| Rank feasible care paths | No | Yes |
+| Enforce consent and idempotency | No | Yes |
+| Explain an authoritative result | Yes | Supplies the evidence and blocks unsupported output |
 
-## NVIDIA and DGX Spark
+Model output is untrusted until it passes schema and rule validation. A model cannot override cost calculations, eligibility gates, network constraints, consent, workflow state, or action authorization.
 
-VELA runs NVIDIA Nemotron locally on an Acer Veriton GN100 powered by NVIDIA GB10. Application model calls pass through the authenticated NemoClaw Hermes gateway rather than calling vLLM directly.
+## NVIDIA stack
 
-DGX Spark matters to VELA because it enables:
-
-- Local inference for workflows that may contain sensitive insurance and care context.
-- The model, retrieval context, workflow state, and document processing pipeline to operate together on one local system.
-- Predictable low latency for a conversational, multistep workflow.
-- A fail closed trust boundary with controlled model and network access through NemoClaw.
-- Continued deterministic evaluation and safe blocking when the model is unavailable.
-
-Current local model:
+VELA runs NVIDIA Nemotron locally on an Acer Veriton GN100 powered by NVIDIA GB10. Application model calls use the authenticated NemoClaw Hermes gateway; the application never bypasses that boundary by calling vLLM directly.
 
 ```text
 nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
 ```
+
+Local execution keeps inference, retrieval context, document processing, and workflow state within one controlled system. If the model is unavailable or returns invalid output, deterministic evaluation continues where possible and consequential actions fail closed.
 
 ## Quick start
 
 ### Requirements
 
 - Python 3.11 or newer
-- Node.js 22 or newer (the pinned version is in `.nvmrc`)
+- Node.js 22, pinned in `.nvmrc`
 - npm
-- Optional authorized access to the team DGX Spark for live Nemotron explanations
 
-### 1. Clone and configure
+Live Nemotron explanations additionally require authorized access to the private Hermes gateway. The seeded deterministic workflow and its tests require no model credentials.
+
+### Install
 
 ```bash
 git clone https://github.com/abhinavm27/abyss.git
 cd abyss
+python3 -m venv .venv
+.venv/bin/python -m pip install -e . -e 'services/api[dev]'
+npm --prefix apps/web ci
 cp .env.example .env
 ```
 
-The seeded deterministic engine and its tests require no credentials. Live Nemotron explanations require the private Hermes connection described in [docs/HERMES_CONNECTION.md](docs/HERMES_CONNECTION.md).
+Never commit `.env`, credentials, uploaded documents, runtime databases, or real health or insurance data.
 
-### 2. Run the deterministic test suite
-
-Use the venv's Python with `services/api` on the path — bare `python3` lacks
-FastAPI and silently skips 9 tests (messaging, Discord, voice-WS, journey
-start) instead of running them.
+### Validate
 
 ```bash
-PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s tests -v
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s services/api/tests -v
+npm --prefix apps/web test -- --run
+npm --prefix apps/web run typecheck
+npm --prefix apps/web run build
 ```
 
-### 3. Run the API
+### Run locally
+
+Start the API:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e . -e 'services/api[dev]'
 PYTHONPATH=src:services/api .venv/bin/uvicorn app.api:app --port 8010
 ```
 
-### 4. Run the web application
-
-In a second terminal:
+Start the web application in a second terminal:
 
 ```bash
-cd apps/web
-npm ci
-npm run dev
+npm --prefix apps/web run dev
 ```
 
 Open `http://localhost:5173`.
 
-### Interface only demo mode
-
-To inspect the interface without the API:
+For an interface-only demonstration without the API:
 
 ```bash
-cd apps/web
-VITE_DEMO_MODE=true npm run dev
+VITE_DEMO_MODE=true npm --prefix apps/web run dev
 ```
 
-Demo mode uses controlled client side fixtures and must not be presented as evidence that external actions occurred.
+Demo mode uses controlled client-side fixtures. It is not evidence that an external action occurred.
 
-## Reproduce the judged demo
+## Reproduce the demonstration
 
-Follow [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md). It defines the seeded inputs, expected decisions, required consent records, sandbox actions, success conditions, recovery cases, and truthful fallback behavior.
+Follow [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md) for the seeded inputs, expected comparison, consent scopes, sandbox actions, recovery cases, and success conditions. Deployment and GN100 verification are documented in [`docs/BUILD_AND_DEPLOY_RUNBOOK.md`](docs/BUILD_AND_DEPLOY_RUNBOOK.md).
 
-## Data and provenance
-
-The hackathon journey uses seeded synthetic patient, plan, provider, and action data. The repository contains no real patient or insurance documents. See [docs/DATA_PROVENANCE.md](docs/DATA_PROVENANCE.md) for every demo data class, its origin, transformations, authority, and known gaps.
-
-## Security and consent
-
-- Secrets, real uploaded documents, private keys, and runtime state are excluded from version control.
-- Every consequential action requires a matching consent record with an exact scope.
-- Coverage transition is blocked until the replacement effective date and first premium are confirmed.
-- External action adapters are sandboxed and idempotent.
-- Material facts retain provenance and verification state.
-- Audit views are redacted and sandbox actions are visibly labeled.
-
-Read [docs/SECURITY.md](docs/SECURITY.md) before handling any document or connecting to the DGX Spark.
-
-## Known limitations
-
-- Enrollment, coverage transition, provider verification, and booking use sandbox adapters.
-- Cost results are estimates and are not guarantees of benefits or patient responsibility.
-- The golden path is intentionally scoped to one synthetic Washington MRI journey.
-- Plan and provider catalogs are controlled fixtures rather than complete live payer directories.
-- Insurance card scans cannot establish full benefits; an SBC or equivalent source is required for cost sharing details.
-- Document formats and voice accuracy vary, and ambiguous inputs may require user clarification.
-- VELA does not diagnose conditions or recommend clinical treatment.
-- Production use would require payer and provider integrations, formal security and compliance validation, persistent encrypted storage, monitoring, and human escalation.
-
-## Next steps
-
-- Expand the evaluation set for extraction, ranking explanations, consent enforcement, and recovery behavior.
-- Add authoritative payer eligibility and provider scheduling integrations behind the existing adapter contracts.
-- Expand beyond the controlled Seattle and Washington catalogs.
-- Add multilingual speech and accessibility preference evaluation.
-- Persist the event ledger and encrypted user memory outside the process local demo store.
-- Conduct formal threat modeling, privacy review, accessibility testing, and clinical safety review.
-
-### Hospital knowledge engine
-
-Set `ABYSS_KNOWLEDGE_DB` to the knowledge engine's SQLite database to make the
-care journey retrieve hospital machine-readable-file rates for its verified
-procedure code. The adapter opens this database read-only. Returned records
-include the hospital source URL, publication/retrieval timestamps, confidence,
-and verification state. Published rates are facility evidence—not proof of
-insurance network participation or a guaranteed member out-of-pocket price.
-
-## Repository map
+## Repository structure
 
 ```text
-apps/web/                  React, Vite, and Capacitor user experience
-.github/workflows/ci.yml   Repeatable backend, frontend, and security checks
-services/api/              FastAPI, document ingestion, pricing, and journey API
-src/abyss/                 Deterministic domain, agents, workflow, and adapters
-scenarios/wa_mri/          Seeded synthetic golden path fixture
-docs/ARCHITECTURE.md       System, authority, trust, and recovery boundaries
-docs/DEMO_RUNBOOK.md       Reproducible judged demo and expected outcomes
-docs/DATA_PROVENANCE.md    Dataset inventory, provenance, and limitations
-docs/SUBMISSION_CHECKLIST.md Repository readiness and remaining submission work
-docs/DEMO_TRUTH.md         Working, sandboxed, and prohibited claims
-docs/SECURITY.md           Repository, infrastructure, and product safeguards
-tests/                     Deterministic unit and vertical slice tests
+apps/web/                    React, Vite, and Capacitor interface
+services/api/                FastAPI, ingestion, retrieval, and journey API
+src/abyss/                   Domain contracts, deterministic engine, and agents
+scenarios/wa_mri/            Seeded Washington MRI demonstration
+tests/                       Domain and vertical-slice tests
+services/api/tests/          API contract and integration tests
+docs/                        Architecture, operations, safety, and demo evidence
+scripts/                     Validation and GN100 operational tooling
+deploy/                      Service deployment definitions
+.github/workflows/ci.yml     Continuous validation
 ```
+
+Key references:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): component, authority, and trust boundaries
+- [`docs/DEMO_TRUTH.md`](docs/DEMO_TRUTH.md): approved claims and sandbox boundaries
+- [`docs/DATA_PROVENANCE.md`](docs/DATA_PROVENANCE.md): source inventory and limitations
+- [`docs/SECURITY.md`](docs/SECURITY.md): repository and runtime safeguards
+- [`docs/HERMES_CONNECTION.md`](docs/HERMES_CONNECTION.md): authenticated model path
+- [`docs/SUBMISSION_CHECKLIST.md`](docs/SUBMISSION_CHECKLIST.md): evidence and readiness tracker
+
+## Product and repository naming
+
+**VELA** is the product name presented to users and judges. The repository name, Python package, environment-variable prefix, database identifiers, service names, and deployment paths retain the original **ABYSS** namespace. Those internal identifiers remain intentionally stable to protect imports, configuration, stored state, scripts, and active integrations.
+
+## Safety and limitations
+
+- Enrollment, coverage transition, provider verification, and booking use controlled or sandboxed adapters.
+- Provider verification may use a controlled endpoint, supervised call, or clearly labeled recording when the external seam is unavailable.
+- Cost results are estimates, not guarantees of benefits or patient responsibility.
+- Plan and provider catalogs are controlled fixtures, not complete live directories.
+- Insurance-card data alone cannot establish complete benefits; cost sharing requires an SBC or equivalent source.
+- Ambiguous inputs remain unresolved until the user or an authoritative source supplies the missing fact.
+- VELA does not diagnose conditions or recommend clinical treatment.
+- Production use would require authorized payer and provider integrations, formal privacy and security review, compliant encrypted persistence, monitoring, accessibility validation, and human escalation.
 
 ## Team VELA
 
 | Team member | Role | Contact |
 | --- | --- | --- |
-| Abishek Muralikrishna | AI Systems and NVIDIA Integration Lead | [Abishek.bm@gmail.com](mailto:Abishek.bm@gmail.com), [508-904-9436](tel:+15089049436) |
-| Abhinav Ravindran | Backend and Healthcare Data Engineering Lead | [abhinav.ravindran27@gmail.com](mailto:abhinav.ravindran27@gmail.com) |
-| Fatima Aguilar | Product, UX, and Frontend Lead | [fsaguilar16@gmail.com](mailto:fsaguilar16@gmail.com), [978-242-2510](tel:+19782422510) |
+| Abishek Muralikrishna | AI Systems and NVIDIA Integration Lead | [Email](mailto:Abishek.bm@gmail.com) |
+| Abhinav Ravindran | Backend and Healthcare Data Engineering Lead | [Email](mailto:abhinav.ravindran27@gmail.com) |
+| Fatima Aguilar | Product, UX, and Frontend Lead | [Email](mailto:fsaguilar16@gmail.com) |
 
 ## Submission links
 
-- Demo video: Pending final recording and upload
-- Deployed application: [vela-care-path.fsaguilar16.chatgpt.site](https://vela-care-path.fsaguilar16.chatgpt.site/)
-- Repository: [github.com/abhinavm27/abyss](https://github.com/abhinavm27/abyss)
+- Demo video: Pending final recording and signed-out verification
+- Deployed application: [Open the VELA interface](https://vela-care-path.fsaguilar16.chatgpt.site/)
+- Source repository: [github.com/abhinavm27/abyss](https://github.com/abhinavm27/abyss)
 
 ## License
 

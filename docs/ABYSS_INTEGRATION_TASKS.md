@@ -1,4 +1,4 @@
-# ABYSS → VELA integration task board
+# VELA Integration Tasks
 
 ## Objective
 

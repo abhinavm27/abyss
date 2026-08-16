@@ -42,9 +42,11 @@ One submission is permitted per team. This tracker records repository readiness;
 
 | Check | Current result | Final command |
 | --- | --- | --- |
-| Python deterministic and vertical slice tests | Passing, 119 tests (109 `unittest` + 10 `pytest`) on August 16, 2026 | `PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s tests -v` |
-| Web typecheck | Passing on merged `main` | `cd apps/web && npm run typecheck` |
-| Web production build | Passing on merged `main` | `cd apps/web && npm run build` |
+| Domain and vertical-slice tests | Passing, 109 tests on August 16, 2026 | `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v` |
+| API service tests | Passing, 17 tests on August 16, 2026 | `PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s services/api/tests -v` |
+| Web application tests | Passing, 9 tests on August 16, 2026 | `npm --prefix apps/web test -- --run` |
+| Web typecheck | Passing on merged `main` | `npm --prefix apps/web run typecheck` |
+| Web production build | Passing on merged `main` | `npm --prefix apps/web run build` |
 | Secret and real data scan | Passing on August 15, 2026 | Review tracked files and repository history again after any last minute change |
 | Clean install reproduction | Passing on August 15, 2026 | Re-run only if dependencies or setup instructions change |
 | Live Hermes integration | Passing on August 16, 2026 — `python3 -m abyss.cli` returned exactly `ABYSS HERMES READY` via the authenticated gateway at `HERMES_BASE_URL` (127.0.0.1:8642); confirmed no code path calls vLLM's port 8000 directly | Use private tunnel and authenticated gateway only |

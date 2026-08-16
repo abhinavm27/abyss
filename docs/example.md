@@ -1,6 +1,6 @@
-# ABYSS Example Journey: Coverage Change + Knee MRI
+# VELA Example Journey: Coverage Change + Knee MRI
 
-This document shows how one request moves through ABYSS. It uses seeded synthetic data for the hackathon. ABYSS is not medical advice, a licensed broker, production enrollment, or production booking.
+This document shows how one request moves through VELA. It uses seeded synthetic data for the hackathon. VELA is not medical advice, a licensed broker, production enrollment, or production booking.
 
 ## User request
 
