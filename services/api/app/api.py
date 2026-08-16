@@ -349,19 +349,15 @@ def _persist_journey_projection(journey: CareJourney, payload: dict) -> None:
         confirmed = selected and journey.booking_service.slot(selected.slot_id)
         if confirmed and confirmed.status == "booked":
             appointment_id = f"appointment-{journey.journey_id}-{confirmed.slot_id}"
-            # `hospital` lives in the knowledge catalog, not this state database —
-            # checking it against `conn` always failed and silently dropped a
-            # valid hospital_id from every confirmed appointment.
+            # `appointment.hospital_id` carries a foreign key into *this* state
+            # database's `hospital` table, which is empty — real hospitals live
+            # in the separate read-only knowledge catalog. Resolving the id
+            # against the catalog and then storing it here raises
+            # `IntegrityError: FOREIGN KEY constraint failed` and bricks the
+            # journey, because this projection re-runs on every later request.
+            # The hospital is still identified by name in `description`, so
+            # nothing user-visible is lost by leaving the cross-database id out.
             local_hospital_id = None
-            catalog_conn = db.connect_catalog(os.environ.get("ABYSS_KNOWLEDGE_DB"))
-            if catalog_conn is not None:
-                try:
-                    known = catalog_conn.execute(
-                        "SELECT id FROM hospital WHERE id=?", (confirmed.hospital_id,)
-                    ).fetchone()
-                    local_hospital_id = confirmed.hospital_id if known else None
-                finally:
-                    catalog_conn.close()
             conn.execute(
                 """INSERT INTO appointment
                    (appointment_id,user_id,journey_id,slot_id,hospital_id,code,description,
@@ -691,6 +687,69 @@ def _restore_intake_journey(
     return journey
 
 
+def _restore_recommend_journey(
+    conn: sqlite3.Connection, journey_id: str | None, user_id: int
+) -> CareJourney | None:
+    """Restore a persisted comparison-stage journey after an API restart.
+
+    `_journeys` is process-local, but `_user_care_context` lists journeys from
+    the database — so without this, every journey sitting at `compare` or
+    `recommend` still renders in the UI and in the model's context while every
+    action against it fails. `recommend` is where a journey lands as soon as
+    care options are computed, so this is the common case, not an edge one.
+
+    The comparison itself is not read back from the snapshot: the facts are
+    restored and the deterministic engine re-runs `prepare_chat_care_options`,
+    so the rebuilt options come from the same code path (and the same live
+    catalog) that produced them originally rather than from stored output.
+    Consents are deliberately not restored as action authority, matching
+    `_restore_booking_journey`.
+    """
+    if not journey_id:
+        return None
+    row = conn.execute(
+        """SELECT snapshot_json FROM care_journey
+           WHERE journey_id=? AND user_id=? AND stage IN ('compare','recommend')
+             AND status='active'""",
+        (journey_id, user_id),
+    ).fetchone()
+    if row is None:
+        return None
+    snapshot = json.loads(row["snapshot_json"])
+    journey = CareJourney.open(
+        journey_id, user_id=str(user_id), **_journey_dependencies()
+    )
+    for item in snapshot.get("facts", []):
+        consent = item.get("consent_requirement")
+        journey.record_fact(DecisionFact(
+            name=str(item["name"]), value=item.get("value"),
+            source=str(item["source"]),
+            observed_at=datetime.fromisoformat(item["observed_at"]),
+            confidence=float(item["confidence"]),
+            verification_status=VerificationStatus(item["verification_status"]),
+            consent_required=ConsentAction(consent) if consent else None,
+        ))
+    resolution = snapshot.get("procedure_resolution")
+    if resolution:
+        journey.procedure_resolution = ProcedureResolution(
+            code=resolution.get("code"),
+            canonical_name=resolution.get("canonical_name"),
+            confidence=str(resolution["confidence"]),
+            candidates=tuple(map(str, resolution.get("candidates", []))),
+            needs_confirmation=bool(resolution.get("needs_confirmation")),
+        )
+    journey.refresh_onboarding_requirements()
+    try:
+        journey.prepare_chat_care_options()
+    except RuntimeError:
+        # The snapshot no longer satisfies the intake prerequisites. Hand back
+        # the journey at intake rather than None, so the caller can continue
+        # the conversation instead of reporting the journey as missing.
+        pass
+    _journeys[journey_id] = journey
+    return journey
+
+
 def _restore_booking_journey(
     conn: sqlite3.Connection, journey_id: str | None, user_id: int
 ) -> CareJourney | None:
@@ -899,6 +958,10 @@ def care_agent_message(
                 )
             if journey is None:
                 journey = _restore_booking_journey(
+                    conn, plan.target_journey_id, user_id
+                )
+            if journey is None:
+                journey = _restore_recommend_journey(
                     conn, plan.target_journey_id, user_id
                 )
             if journey is None:
@@ -2375,6 +2438,17 @@ def _plan_comparison_reply(result: dict) -> str:
     plans = result.get("plans") or []
     if not plans:
         return result.get("message") or "I could not compare your plans right now."
+    incomplete = result.get("incomplete_plans") or []
+    if incomplete:
+        # Refusing to rank is the honest answer: the totals for these plans are
+        # missing their real cost sharing, so any ranking would be arbitrary.
+        names = " and ".join(incomplete) if len(incomplete) < 3 else ", ".join(incomplete)
+        return (
+            f"I can't compare these plans yet. {names} "
+            f"{'has' if len(incomplete) == 1 else 'have'} no cost-sharing detail on file, "
+            "so I can only see the deductible — the real cost would be higher and I'd be "
+            "guessing. Upload the Summary of Benefits for it in Documents and I'll run this again."
+        )
     recommendation = result.get("recommendation")
     if recommendation:
         savings = recommendation["estimated_annual_savings"]["predicted"]
@@ -2508,9 +2582,23 @@ def _run_plan_comparison(
 
     plan_results.sort(key=lambda p: p["scenarios"]["predicted"]["annual_total"])
 
+    # A scenario is `complete=False` when a service's cost share could not be
+    # classified: `simulate_annual_scenario` then charges only the deductible,
+    # which understates the member's real exposure. Ranking on that number and
+    # announcing a dollar saving would state a confident total the engine
+    # itself knows is wrong, so name the plans instead and refuse to rank.
+    incomplete_labels = [
+        plan["label"] for plan in plan_results
+        if not plan["scenarios"]["predicted"]["complete"]
+    ]
+
     current = next((p for p in plan_results if p["is_current"]), None)
     recommendation = None
-    if current is not None and plan_results[0]["plan_id"] != current["plan_id"]:
+    if (
+        not incomplete_labels
+        and current is not None
+        and plan_results[0]["plan_id"] != current["plan_id"]
+    ):
         best = plan_results[0]
         recommendation = {
             "recommended_plan_id": best["plan_id"],
@@ -2535,6 +2623,7 @@ def _run_plan_comparison(
         "household_size": household_size,
         "plans": plan_results,
         "unresolved_services": unresolved,
+        "incomplete_plans": incomplete_labels,
         "recommendation": recommendation,
     }
 
@@ -2789,6 +2878,17 @@ def add_appointment(
     conn: sqlite3.Connection = Depends(get_conn),
     user_id: int = Depends(require_user),
 ):
+    # `hospital_id` is a foreign key into this state database's `hospital`
+    # table, but callers get hospital ids from the knowledge catalog
+    # (`GET /api/hospitals`), which is a different database. Storing one here
+    # raises IntegrityError; say so plainly instead of returning a 500.
+    if body.hospital_id is not None and conn.execute(
+        "SELECT 1 FROM hospital WHERE id = ?", (body.hospital_id,)
+    ).fetchone() is None:
+        raise HTTPException(
+            status_code=422,
+            detail="hospital_id is not known to this database; omit it and name the hospital in description",
+        )
     cur = conn.execute(
         """INSERT INTO appointment (user_id, hospital_id, code, description, booked_for,
                                     estimated_cost, note, created_at)

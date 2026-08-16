@@ -148,12 +148,22 @@ class CareJourney:
             normalized = " ".join(text.lower().replace("-", " ").split())
             existing_code = self.workflow.care_state.facts.get("procedure_code")
             confirmed_code = str(existing_code.value) if existing_code else None
-            if "without contrast" in normalized or "no contrast" in normalized:
-                confirmed_code = "73721"
-            elif "with contrast" in normalized:
-                confirmed_code = "73722"
             if not procedure_phrase:
                 procedure_phrase = str(procedure)
+            contrast_code = None
+            if "without contrast" in normalized or "no contrast" in normalized:
+                contrast_code = "73721"
+            elif "with contrast" in normalized:
+                contrast_code = "73722"
+            if contrast_code is not None:
+                # A contrast answer only chooses between candidates the catalog
+                # itself proposed for this phrase. Without this check, any
+                # "without contrast" reply forces the MRI-knee code onto a
+                # shoulder, brain or abdominal request, and it is then recorded
+                # as a VERIFIED catalog fact and priced as a knee MRI.
+                proposed = self.knowledge_agent.propose_procedure(procedure_phrase)
+                if contrast_code in proposed.candidates:
+                    confirmed_code = contrast_code
             self.procedure_resolution = self.knowledge_agent.propose_procedure(
                 procedure_phrase, confirmed_code=confirmed_code
             )

@@ -11,6 +11,9 @@ fi
 
 : "${ABYSS_API_HEALTH_URL:=http://127.0.0.1:8011/api/health}"
 : "${ABYSS_WEB_HEALTH_URL:=http://127.0.0.1:4173/}"
+: "${ABYSS_HERMES_HEALTH_URL:=http://127.0.0.1:8642/v1/models}"
+: "${NVIDIA_ASR_URL:=http://127.0.0.1:9001}"
+: "${NVIDIA_TTS_URL:=http://127.0.0.1:9002}"
 : "${ABYSS_DB:=/home/acer01/abyss-demo/data/abyss-state.db}"
 : "${ABYSS_KNOWLEDGE_DB:=/home/acer01/abyss/services/api/abyss.db}"
 
@@ -70,6 +73,28 @@ else
   printf 'fail %-18s could not read catalog status from %s\n' "knowledge catalog" "$ABYSS_API_HEALTH_URL" >&2
   failures=$((failures + 1))
 fi
+
+# Nemotron and the two voice NIMs are demo-critical but were invisible here:
+# this script reported "healthy" with all three down, because it only probed
+# the API and the web server. Hermes answers 401 without a bearer token, which
+# proves it is up — only a connection failure means it is actually down.
+check_reachable() {
+  local label="$1"
+  local url="$2"
+  local code
+
+  code="$(curl --silent --output /dev/null --max-time 8 --write-out '%{http_code}' "$url" 2>/dev/null || true)"
+  if [[ "$code" == "000" || -z "$code" ]]; then
+    printf 'fail %-18s %s (unreachable)\n' "$label" "$url" >&2
+    failures=$((failures + 1))
+  elif [[ "$quiet" == false ]]; then
+    printf 'ok   %-18s %s (HTTP %s)\n' "$label" "$url" "$code"
+  fi
+}
+
+check_reachable "Hermes gateway" "$ABYSS_HERMES_HEALTH_URL"
+check_reachable "Parakeet ASR" "${NVIDIA_ASR_URL%/}/v1/health/ready"
+check_reachable "Magpie TTS" "${NVIDIA_TTS_URL%/}/v1/health/ready"
 
 state_dir="$(dirname "$ABYSS_DB")"
 if [[ -d "$state_dir" && -w "$state_dir" ]]; then

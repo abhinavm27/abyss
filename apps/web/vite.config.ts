@@ -12,12 +12,12 @@ export default defineConfig({
     proxy: {
       // WebSocket must be declared before the HTTP entry, or `/api` swallows it.
       "/ws": {
-        target: process.env.VITE_BACKEND_URL || "http://127.0.0.1:8010",
+        target: process.env.VITE_BACKEND_URL || "http://127.0.0.1:8011",
         ws: true,
         changeOrigin: true,
       },
       "/api": {
-        target: process.env.VITE_BACKEND_URL || "http://127.0.0.1:8010",
+        target: process.env.VITE_BACKEND_URL || "http://127.0.0.1:8011",
         changeOrigin: true,
       },
     },
