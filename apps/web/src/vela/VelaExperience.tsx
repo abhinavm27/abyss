@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken, type CareAgentResponse, type CareContext, type CareJourneySnapshot } from "@/lib/api";
 import { VOICE_LABEL, useVoiceSession } from "@/hooks/useVoiceSession";
 import { captureCard } from "@/lib/cardScan";
+import { SECURE_APP_URL } from "@/lib/voiceConfig";
+import { voiceStartErrorMessage } from "@/lib/voiceErrors";
 import { NeuralPath } from "@/vela/NeuralPath";
 import { AppointmentsTab, DocumentsTab, PathsTab, PreferencesTab, type VelaAppointment, type VelaDocument } from "@/vela/VelaTabs";
 
@@ -760,7 +762,11 @@ export function VelaExperience() {
       }
       setVoiceStarted(true);
     } catch (error) {
-      setNotice(error instanceof Error && error.name === "NotAllowedError" ? "Microphone access was denied. You can continue by chat instead." : "Microphone unavailable. You can continue by chat instead.");
+      setNotice(voiceStartErrorMessage(error, {
+        isSecureContext: window.isSecureContext,
+        hasGetUserMedia: Boolean(navigator.mediaDevices?.getUserMedia),
+        secureAppUrl: SECURE_APP_URL,
+      }));
       setInputMode("chat");
     }
   };

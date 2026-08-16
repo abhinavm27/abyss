@@ -7,6 +7,7 @@ const wsProtocol = isSecure ? "wss:" : "ws:";
 const host = typeof window !== "undefined" ? window.location.host : "localhost:8010";
 
 export const VOICE_WS_URL = import.meta.env.VITE_WS_URL || `${wsProtocol}//${host}/ws`;
+export const SECURE_APP_URL = import.meta.env.VITE_SECURE_APP_URL || "";
 
 // Parakeet receives 16 kHz input. Magpie's output rate is announced in the
 // `ready` frame, so the initial value is only a safe pre-handshake default.

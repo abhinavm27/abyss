@@ -292,6 +292,18 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
 
   const connect = useCallback(async () => {
     if (wsRef.current) return;
+    // getUserMedia is deliberately unavailable on ordinary HTTP origins. Check
+    // before opening a WebSocket so an insecure URL does not leave a short-lived
+    // orphaned voice session or get mislabeled as a broken microphone.
+    if (!window.isSecureContext) {
+      throw new DOMException("microphone capture requires a secure context", "SecurityError");
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new DOMException("getUserMedia is unavailable", "NotSupportedError");
+    }
+    if (!window.AudioContext || !window.AudioWorkletNode) {
+      throw new DOMException("Web Audio worklets are unavailable", "NotSupportedError");
+    }
     setStatus("connecting");
 
     const ws = new WebSocket(VOICE_WS_URL);
