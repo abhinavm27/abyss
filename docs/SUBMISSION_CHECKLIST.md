@@ -42,15 +42,28 @@ One submission is permitted per team. This tracker records repository readiness;
 
 | Check | Current result | Final command |
 | --- | --- | --- |
-| Domain and vertical-slice tests | Passing, 109 tests on August 16, 2026 | `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v` |
-| API service tests | Passing, 17 tests on August 16, 2026 | `PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s services/api/tests -v` |
-| Web application tests | Passing, 9 tests on August 16, 2026 | `npm --prefix apps/web test -- --run` |
-| Web typecheck | Passing on merged `main` | `npm --prefix apps/web run typecheck` |
-| Web production build | Passing on merged `main` | `npm --prefix apps/web run build` |
-| Secret and real data scan | Passing on August 15, 2026 | Review tracked files and repository history again after any last minute change |
+| Domain and vertical-slice tests | Passing, 109 tests on August 16, 2026 at `6c86757` | `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v` |
+| API service tests | Passing, 17 tests on August 16, 2026 at `6c86757` | `PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s services/api/tests -v` |
+| Web application tests | Passing, 9 tests on August 16, 2026 at `6c86757` | `npm --prefix apps/web test -- --run` |
+| Web typecheck | Passing on August 16, 2026 at `6c86757` | `npm --prefix apps/web run typecheck` |
+| Web production build | Passing on August 16, 2026 at `6c86757` | `npm --prefix apps/web run build` |
+| Secret and real data review | Focused tracked-file and changed-path scan passing on August 16, 2026 at `6c86757`; no private-key or common token patterns, runtime databases, raw uploads, or `.env` files found | Run the repository-history scanner again if one becomes available before merge |
 | Clean install reproduction | Passing on August 15, 2026 | Re-run only if dependencies or setup instructions change |
 | Live Hermes integration | Passing on August 16, 2026 — `python3 -m abyss.cli` returned exactly `ABYSS HERMES READY` via the authenticated gateway at `HERMES_BASE_URL` (127.0.0.1:8642); confirmed no code path calls vLLM's port 8000 directly | Use private tunnel and authenticated gateway only |
+| Public interface smoke check | Partial on August 16, 2026: the deployed site loaded, accepted the synthetic MRI request, displayed three deterministic paths, and showed the appointment workspace | Complete the golden path three times and verify that the public receipt view visibly says sandbox before submission |
 | Full UI journey | Implemented | Run the golden path three times on the final deployment before recording |
+
+## Repository polish verification
+
+- Branch: `codex/repo_struct`
+- Pull request: `#9` into `main`
+- Validated source revision: `6c86757`
+- Runtime impact: none; the branch changes repository documentation and CI coverage only
+- GitHub About description, website, and recommended topics: updated August 16, 2026
+- Public deployment: reachable at `https://vela-care-path.fsaguilar16.chatgpt.site/`
+- Still required before merge or submission: final signed-out video link, three complete
+  deployed golden-path rehearsals, visibly sandboxed public receipt verification,
+  custom social preview, and second-teammate review
 
 ## Final submission sequence
 
