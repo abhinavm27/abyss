@@ -1087,7 +1087,7 @@ export function VelaExperience() {
               }}
             />
           )}
-          {tab === "preferences" && <PreferencesTab />}
+          {tab === "preferences" && <PreferencesTab journey={journey} />}
         </main>
       )}
       {mobile && <MobileNav scene={scene} tab={tab} onTab={setTab} onReset={reset} />}

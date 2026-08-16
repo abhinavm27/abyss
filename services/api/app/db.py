@@ -217,6 +217,61 @@ CREATE INDEX IF NOT EXISTS idx_care_agent_trace_user
   ON care_agent_trace(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_care_agent_trace_correlation
   ON care_agent_trace(correlation_id, created_at);
+
+-- Durable, append-oriented member memory. Agents may append sourced facts and
+-- read a redacted snapshot; verification remains owned by deterministic flows.
+CREATE TABLE IF NOT EXISTS user_memory_fact (
+  id                  INTEGER PRIMARY KEY,
+  user_id             INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  fact_name           TEXT NOT NULL,
+  value_json          TEXT NOT NULL,
+  source              TEXT NOT NULL,
+  observed_at         TEXT NOT NULL,
+  confidence          REAL NOT NULL,
+  verification_status TEXT NOT NULL,
+  consent_requirement TEXT,
+  superseded_by       INTEGER REFERENCES user_memory_fact(id),
+  created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_memory_fact_current
+  ON user_memory_fact(user_id, fact_name, superseded_by, id DESC);
+
+CREATE TABLE IF NOT EXISTS agent_memory_event (
+  id          INTEGER PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  agent_role  TEXT NOT NULL,
+  event_type  TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  related_ref TEXT,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_event_user
+  ON agent_memory_event(user_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS messaging_preference (
+  user_id            INTEGER PRIMARY KEY REFERENCES user(id) ON DELETE CASCADE,
+  channel            TEXT NOT NULL,
+  destination_label  TEXT NOT NULL,
+  enabled            INTEGER NOT NULL DEFAULT 0,
+  consent_scope      TEXT,
+  consented_at       TEXT,
+  updated_at         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messaging_receipt (
+  id                     INTEGER PRIMARY KEY,
+  user_id                INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  channel                TEXT NOT NULL,
+  destination_redacted   TEXT NOT NULL,
+  message_kind           TEXT NOT NULL,
+  result_ref             TEXT NOT NULL,
+  confirmation_reference TEXT NOT NULL,
+  sandbox                INTEGER NOT NULL DEFAULT 1,
+  consent_scope          TEXT NOT NULL,
+  created_at             TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_receipt_user
+  ON messaging_receipt(user_id, id DESC);
 """
 
 

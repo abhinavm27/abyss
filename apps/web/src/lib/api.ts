@@ -851,7 +851,60 @@ export const api = {
   putPlan: (body: PlanBody) =>
     req<PlanBody & { id: number }>("/api/plan", { method: "PUT", body: JSON.stringify(body) }),
 
+  memberMemory: () => req<MemberMemory>("/api/me/memory"),
 
+  messagingPreference: () => req<MessagingPreference>("/api/me/messaging"),
+
+  setMessagingPreference: (enabled: boolean, destinationLabel = "discord:eevee") =>
+    req<MessagingPreference>("/api/me/messaging", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, destination_label: destinationLabel }),
+    }),
+
+  notificationPreview: (resultRef: string) =>
+    req<NotificationPreview>("/api/results/notify/preview", {
+      method: "POST",
+      body: JSON.stringify({ result_ref: resultRef }),
+    }),
+
+  sendNotification: (resultRef: string, consentScope: string) =>
+    req<NotificationReceipt>("/api/results/notify", {
+      method: "POST",
+      body: JSON.stringify({ result_ref: resultRef, consent_scope: consentScope, consent_approved: true }),
+    }),
+
+
+};
+
+export type MemberMemory = {
+  user_id: string;
+  current_facts: Array<{ id: number; name: string; value: unknown; source: string; confidence: number; verification_status: string }>;
+  active_plan: null | { label?: string | null; payer_name?: string | null };
+  agent_events: Array<{ id: number; agent_role: string; event_type: string; created_at: string }>;
+};
+
+export type MessagingPreference = {
+  channel: "discord";
+  destination_label: string;
+  enabled: boolean;
+  webhook_configured: boolean;
+  consent_scope?: string | null;
+};
+
+export type NotificationPreview = {
+  channel: "discord";
+  destination_label: string;
+  result_ref: string;
+  body: string;
+  consent_scope: string;
+};
+
+export type NotificationReceipt = {
+  ok: boolean;
+  channel: "discord";
+  confirmation_reference: string;
+  destination_redacted: string;
+  sandbox: boolean;
 };
 
 /** Format a publish date that came verbatim out of an MRF.

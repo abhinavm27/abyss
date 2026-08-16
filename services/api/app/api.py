@@ -25,10 +25,14 @@ from abyss.hermes_client import HermesError
 from abyss.domain import ConsentAction, DecisionFact, VerificationStatus
 from abyss.journey import CareJourney
 from abyss.knowledge import SQLiteHospitalKnowledgeCatalog
+from abyss.memory import PersistentMemoryStore
 from abyss.procedures import ProcedureResolution
 from abyss.workflow import WorkflowStage
 
 from . import auth, db, retrieval
+from .memory_routes import build_memory_router
+from .messaging_routes import build_messaging_router
+from .discord_routes import build_discord_router
 from .ingest import sbc
 from .estimator import Plan, estimate
 from .ws import voice_endpoint
@@ -88,7 +92,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 def get_conn():
     conn = db.connect()
     db.init_db(conn)
@@ -114,6 +117,10 @@ def require_user(user_id: int | None = Depends(optional_user)) -> int:
     if user_id is None:
         raise auth.Unauthorized()
     return user_id
+
+
+app.include_router(build_memory_router(get_conn=get_conn, require_user=require_user))
+app.include_router(build_messaging_router(get_conn=get_conn, require_user=require_user))
 
 
 class AgentChatIn(BaseModel):
@@ -159,7 +166,7 @@ class CareAgentMessageIn(BaseModel):
     active_journey_id: str | None = None
     utterance_id: str | None = Field(default=None, max_length=200)
     correlation_id: str | None = Field(default=None, max_length=200)
-    channel: str = Field(default="chat", pattern="^(chat|voice)$")
+    channel: str = Field(default="chat", pattern="^(chat|voice|discord)$")
     reply_to_pending: bool = False
 
 
@@ -273,6 +280,16 @@ def _persist_journey_projection(journey: CareJourney, payload: dict) -> None:
             (journey.journey_id, user_id, title, journey.stage.value, status,
              json.dumps(payload, default=str, separators=(",", ":")), now, now),
         )
+        memory = PersistentMemoryStore(conn)
+        memory.sync_journey_facts(user_id, payload.get("facts", []))
+        memory.append_event(
+            user_id,
+            agent_role="care_journey",
+            event_type="journey_projected",
+            payload={"journey_id": journey.journey_id, "stage": journey.stage.value},
+            related_ref=journey.journey_id,
+            commit=False,
+        )
         selected = journey.selected_booking_slot
         confirmed = selected and journey.booking_service.slot(selected.slot_id)
         if confirmed and confirmed.status == "booked":
@@ -351,6 +368,7 @@ def _user_care_context(conn: sqlite3.Connection, user_id: int) -> dict:
     return {
         "user": {"user_id": str(user_id)},
         "current_plan": plan,
+        "member_memory": PersistentMemoryStore(conn).hermes_snapshot(user_id),
         "journeys": journeys,
         "appointments": appointments,
         "scheduled_tasks": [
@@ -847,6 +865,72 @@ def _voice_care_turn(
         conn.close()
 
 
+def _discord_member_turn(conn: sqlite3.Connection, user_id: int, text: str) -> dict:
+    """Route Discord through current deterministic context and Hermes gateway."""
+    normalized = text.lower()
+    memory = PersistentMemoryStore(conn)
+    plan_terms = ("deductible", "out of pocket", "copay", "coinsurance", "my plan")
+    action_terms = ("book", "schedule", "reschedule", "appointment", "need", "want")
+    if any(term in normalized for term in plan_terms) and not any(
+        term in normalized for term in action_terms
+    ):
+        evidence = {"member_memory": memory.hermes_snapshot(user_id)}
+        plan = evidence["member_memory"].get("active_plan")
+        if not plan:
+            reply = "I don't have a current plan saved for this synthetic member yet."
+        else:
+            reply = explain(text, evidence)
+        memory.append_event(
+            user_id,
+            agent_role="discord",
+            event_type="grounded_plan_question",
+            payload={"question_kind": "plan"},
+            related_ref="discord-turn",
+        )
+        return {"reply": reply[:1800], "user_id": user_id, "channel": "discord"}
+
+    context = _user_care_context(conn, user_id)
+    active = next(
+        (item for item in context["journeys"] if item.get("status") == "active"),
+        None,
+    )
+    active_id = active.get("journey_id") if active else None
+    utterance_id = f"discord-{uuid.uuid4().hex[:12]}"
+    correlation_id = f"discord-correlation-{uuid.uuid4().hex[:12]}"
+    explicit = _care_journey_agent.explicit_pending_reply_plan(
+        text,
+        context,
+        active_id,
+        utterance_id=utterance_id,
+        correlation_id=correlation_id,
+    )
+    result = care_agent_message(
+        CareAgentMessageIn(
+            text=text,
+            active_journey_id=active_id,
+            utterance_id=utterance_id,
+            correlation_id=correlation_id,
+            channel="discord",
+            reply_to_pending=explicit is not None,
+        ),
+        conn=conn,
+        user_id=user_id,
+    )
+    return {
+        "reply": str(result["reply"])[:1800],
+        "user_id": user_id,
+        "channel": "discord",
+        "journey": result.get("journey"),
+        "plan": result.get("plan"),
+    }
+
+
+app.include_router(build_discord_router(
+    get_conn=get_conn,
+    turn_handler=_discord_member_turn,
+))
+
+
 @app.get("/api/journeys/{journey_id}")
 def get_journey(
     journey_id: str,
@@ -1107,10 +1191,16 @@ def action_journey(journey_id: str, body: JourneyActionIn, user_id: int = Depend
 
 
 @app.post("/api/agent/chat")
-def agent_chat(body: AgentChatIn, user_id: int = Depends(require_user)):
+def agent_chat(
+    body: AgentChatIn,
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
     """Have GN100-hosted Hermes explain an authoritative VELA result."""
+    evidence = dict(body.evidence)
+    evidence["member_memory"] = PersistentMemoryStore(conn).hermes_snapshot(user_id)
     try:
-        return {"reply": explain(body.question, body.evidence)}
+        return {"reply": explain(body.question, evidence)}
     except HermesError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

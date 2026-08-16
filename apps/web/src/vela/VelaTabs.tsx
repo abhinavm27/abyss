@@ -1,6 +1,6 @@
 import { Bell, Building2, CalendarDays, Camera, Check, ChevronRight, CircleDollarSign, Clock3, Download, FileText, HeartHandshake, Languages, MapPin, Network, Plus, ScanLine, ShieldCheck, Stethoscope, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, type CareContext, type CareJourneySnapshot } from "@/lib/api";
+import { api, type CareContext, type CareJourneySnapshot, type MemberMemory, type MessagingPreference, type NotificationPreview } from "@/lib/api";
 
 export type VelaDocument = {
   id: string;
@@ -579,17 +579,65 @@ export function DocumentsTab({ documents, onDocuments, liveMode, openCamera, onO
   );
 }
 
-export function PreferencesTab() {
+export function PreferencesTab({ journey }: { journey: CareJourneySnapshot | null }) {
   const [prefs, setPrefs] = useState({
     distance: 15,
     maxCost: 500,
     language: "English",
     keepDoctor: true,
-    textUpdates: true,
     emailReceipts: true,
     morning: true,
   });
+  const [messaging, setMessaging] = useState<MessagingPreference | null>(null);
+  const [memory, setMemory] = useState<MemberMemory | null>(null);
+  const [messagePreview, setMessagePreview] = useState<NotificationPreview | null>(null);
+  const [messageBusy, setMessageBusy] = useState(false);
+  const [messageStatus, setMessageStatus] = useState("");
+  useEffect(() => {
+    void api.messagingPreference().then(setMessaging).catch(() => setMessaging(null));
+    void api.memberMemory().then(setMemory).catch(() => setMemory(null));
+  }, []);
   const toggle = (key: keyof typeof prefs) => setPrefs({ ...prefs, [key]: !prefs[key] });
+  const toggleDiscord = async () => {
+    if (!messaging || messageBusy) return;
+    setMessageBusy(true);
+    setMessageStatus("");
+    try {
+      const next = await api.setMessagingPreference(!messaging.enabled, messaging.destination_label);
+      setMessaging(next);
+      setMessagePreview(null);
+      setMessageStatus(next.enabled ? "Discord link notifications enabled." : "Discord notifications disabled.");
+    } catch (error) {
+      setMessageStatus(error instanceof Error ? error.message : "Discord preference could not be updated.");
+    } finally {
+      setMessageBusy(false);
+    }
+  };
+  const previewDiscord = async () => {
+    if (!journey || messageBusy) return;
+    setMessageBusy(true);
+    setMessageStatus("");
+    try {
+      setMessagePreview(await api.notificationPreview(journey.journey_id));
+    } catch (error) {
+      setMessageStatus(error instanceof Error ? error.message : "The notice could not be prepared.");
+    } finally {
+      setMessageBusy(false);
+    }
+  };
+  const sendDiscord = async () => {
+    if (!messagePreview || messageBusy) return;
+    setMessageBusy(true);
+    try {
+      const receipt = await api.sendNotification(messagePreview.result_ref, messagePreview.consent_scope);
+      setMessageStatus(`Delivered to Discord · receipt ${receipt.confirmation_reference}`);
+      setMessagePreview(null);
+    } catch (error) {
+      setMessageStatus(error instanceof Error ? error.message : "The approved notice could not be sent.");
+    } finally {
+      setMessageBusy(false);
+    }
+  };
   return (
     <section className="vela-tab-page vela-preferences-page">
       <header>
@@ -668,12 +716,28 @@ export function PreferencesTab() {
           <div className="vela-pref-title">
             <Bell />
             <div>
-              <h2>Text updates</h2>
-              <p>Appointment and action status messages</p>
+              <h2>Discord updates</h2>
+              <p>Link-only notices · no care details or prices</p>
             </div>
-            <button className={prefs.textUpdates ? "is-on" : ""} onClick={() => toggle("textUpdates")}>
+            <button
+              className={messaging?.enabled ? "is-on" : ""}
+              disabled={!messaging?.webhook_configured || messageBusy}
+              onClick={() => void toggleDiscord()}
+              aria-label="Toggle Discord link notifications"
+            >
               <i />
             </button>
+          </div>
+          <div className="vela-discord-detail">
+            <span>{messaging?.webhook_configured ? `Connected · ${messaging.destination_label}` : "Discord webhook is not configured"}</span>
+            {messaging?.enabled && journey && !messagePreview && <button onClick={() => void previewDiscord()} disabled={messageBusy}>Preview journey notice</button>}
+            {messagePreview && (
+              <div>
+                <p>{messagePreview.body}</p>
+                <button onClick={() => void sendDiscord()} disabled={messageBusy}>Approve and send this exact notice</button>
+              </div>
+            )}
+            {messageStatus && <b>{messageStatus}</b>}
           </div>
           <div className="vela-pref-title second">
             <Download />
@@ -686,10 +750,24 @@ export function PreferencesTab() {
             </button>
           </div>
         </article>
+        <article>
+          <div className="vela-pref-title">
+            <Network />
+            <div>
+              <h2>Shared member memory</h2>
+              <p>Available to journey, voice, and Discord agents</p>
+            </div>
+            <b>{memory?.current_facts.length ?? 0} facts</b>
+          </div>
+          <div className="vela-memory-detail">
+            <span>{memory?.active_plan?.label || memory?.active_plan?.payer_name || "No current plan saved"}</span>
+            <small>{memory?.agent_events.length ?? 0} recent ledger events · model snapshots exclude credentials and member identifiers</small>
+          </div>
+        </article>
       </div>
       <p className="vela-preferences-saved">
         <Check />
-        Preferences saved on this device
+        Decision preferences stay on this device; member memory and messaging consent are stored on the server
       </p>
     </section>
   );

@@ -687,6 +687,8 @@ button { color: inherit; }
   .vela-recommendation-card { margin-top: 34vh; }
 }
 
+.vela-discord-detail,.vela-memory-detail{margin-top:14px;padding:12px;border-radius:12px;background:rgba(17,105,166,.055);display:grid;gap:8px;color:#64758a;font-size:9px}.vela-discord-detail>button,.vela-discord-detail div button{justify-self:start;border:1px solid rgba(20,114,186,.22);border-radius:9px;padding:7px 10px;background:#fff;color:#1472ba;font-size:9px;font-weight:700}.vela-discord-detail div{display:grid;gap:8px}.vela-discord-detail div p{margin:0;overflow-wrap:anywhere;line-height:1.5}.vela-discord-detail>b{color:#16866f;font-weight:600}.vela-memory-detail span{color:#294d70;font-weight:700}.vela-memory-detail small{line-height:1.5}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }

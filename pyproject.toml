@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "ruff>=0.9"]
+discord = ["discord.py>=2.4"]
 
 [project.scripts]
 abyss-hermes-check = "abyss.cli:main"
