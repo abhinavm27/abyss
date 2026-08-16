@@ -55,6 +55,38 @@ class CareJourneyAgentTests(unittest.TestCase):
             utterance_id="utterance-2",
             correlation_id="correlation-2",
         ))
+
+    def test_voice_exact_pending_answer_uses_fast_path(self) -> None:
+        context = {"journeys": [{
+            "journey_id": "journey-ultrasound",
+            "stage": "intake",
+            "pending_fields": ["procedure_code_confirmation"],
+        }]}
+        plan = CareJourneyAgent.explicit_pending_reply_plan(
+            "Complete abdominal ultrasound",
+            context,
+            "journey-ultrasound",
+            utterance_id="utterance-voice",
+            correlation_id="correlation-voice",
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.source, "explicit_pending_reply")
+
+    def test_voice_ambiguous_pending_answer_keeps_model_reasoning(self) -> None:
+        context = {"journeys": [{
+            "journey_id": "journey-ultrasound",
+            "stage": "intake",
+            "pending_fields": ["procedure_code_confirmation"],
+        }]}
+        plan = CareJourneyAgent.explicit_pending_reply_plan(
+            "I want to do something else",
+            context,
+            "journey-ultrasound",
+            utterance_id="utterance-voice",
+            correlation_id="correlation-voice",
+        )
+        self.assertIsNone(plan)
+
     def setUp(self) -> None:
         self.context = {
             "user": {"user_id": "7"},

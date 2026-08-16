@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
-from .agent import AgentOutputError
+from .agent import AgentOutputError, extract_explicit_facts
 from .hermes_client import HermesClient
 
 
@@ -129,6 +129,34 @@ class CareJourneyAgent:
             source="explicit_pending_reply",
             confidence=1.0,
         )
+
+    @classmethod
+    def explicit_pending_reply_plan(
+        cls,
+        text: str,
+        context: dict,
+        active_journey_id: str | None,
+        *,
+        utterance_id: str,
+        correlation_id: str,
+    ) -> JourneyPlan | None:
+        """Use the low-latency path only for a source-backed spoken answer.
+
+        Voice has no button metadata proving that an utterance answers the open
+        question. A narrow deterministic extraction check keeps ambiguous
+        speech on the normal Hermes planning path while exact intake details
+        avoid an unnecessary model round trip.
+        """
+        plan = cls.pending_reply_plan(
+            context,
+            active_journey_id,
+            utterance_id=utterance_id,
+            correlation_id=correlation_id,
+        )
+        if plan is None:
+            return None
+        facts = extract_explicit_facts(text, source="voice_transcript")
+        return plan if facts else None
 
     def plan(
         self,

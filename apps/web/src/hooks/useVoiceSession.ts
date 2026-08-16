@@ -181,6 +181,9 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
   // While the assistant speaks, drop captured frames instead of sending them.
   const mutedRef = useRef(false);
   const turnInFlightRef = useRef(false);
+  // A short acknowledgement may finish playing before agent work does. Keep
+  // capture closed until the server explicitly completes the whole turn.
+  const awaitingTurnCompleteRef = useRef(false);
   const unmuteTimerRef = useRef<number | null>(null);
 
   const append = useCallback((role: "user" | "assistant", text: string) => {
@@ -250,6 +253,7 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
     if (unmuteTimerRef.current) window.clearTimeout(unmuteTimerRef.current);
     const msUntilDone = Math.max(0, (nextPlayRef.current - ctx.currentTime) * 1000) + 250;
     unmuteTimerRef.current = window.setTimeout(() => {
+      if (awaitingTurnCompleteRef.current) return;
       mutedRef.current = false;
       turnInFlightRef.current = false;
       setStatus((s) => (s === "speaking" ? "listening" : s));
@@ -281,6 +285,7 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
     wsRef.current = null;
     mutedRef.current = false;
     turnInFlightRef.current = false;
+    awaitingTurnCompleteRef.current = false;
     setMicLevel(0);
     setStatus("idle");
   }, [stopPlayback]);
@@ -325,11 +330,13 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
           break;
         case "interrupted":
           stopPlayback();
+          awaitingTurnCompleteRef.current = false;
           mutedRef.current = false;
           turnInFlightRef.current = false;
           setStatus("listening");
           break;
         case "turn_complete":
+          awaitingTurnCompleteRef.current = false;
           // Magpie audio chunks are scheduled ahead of currentTime. Playback's
           // completion timer reopens the microphone when audio exists; a
           // text-only response can reopen it immediately.
@@ -343,6 +350,7 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
           // The server rejected one utterance safely (for example, malformed
           // model JSON). Keep the authenticated voice session open so the user
           // can repeat or clarify instead of starting over.
+          awaitingTurnCompleteRef.current = false;
           mutedRef.current = false;
           turnInFlightRef.current = false;
           setMicLevel(0);
@@ -350,6 +358,7 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
           onError?.(String(msg.message ?? "That turn could not be processed. Please try again."));
           break;
         case "error":
+          awaitingTurnCompleteRef.current = false;
           setStatus("error");
           onError?.(String(msg.message ?? "voice session failed"));
           break;
@@ -412,6 +421,7 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
             // but no more microphone frames leave the browser until the
             // backend response has completed.
             turnInFlightRef.current = true;
+            awaitingTurnCompleteRef.current = true;
             mutedRef.current = true;
             setMicLevel(0);
             setStatus("transcribing");
@@ -446,6 +456,10 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
 
   const sendText = useCallback((text: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      turnInFlightRef.current = true;
+      awaitingTurnCompleteRef.current = true;
+      mutedRef.current = true;
+      setStatus("reasoning");
       wsRef.current.send(JSON.stringify({ type: "text", text }));
       append("user", text);
     }

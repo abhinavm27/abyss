@@ -434,15 +434,30 @@ async def voice_endpoint(
             "type": "transcript", "role": "user", "text": normalized,
             "utterance_id": turn_id, "session_id": session_id,
         })
-        await ws.send_json({"type": "processing", "stage": "reasoning"})
-        result = await asyncio.to_thread(
+        # Start agent work immediately, then fill the otherwise silent gap with
+        # a brief spoken acknowledgement. The acknowledgement never claims an
+        # action or result; the grounded reply still comes from the care path.
+        care_task = asyncio.create_task(asyncio.to_thread(
             care_turn,
             normalized,
             active_journey_id,
             user_id,
             turn_id,
             correlation_id,
+        ))
+        acknowledgement = (
+            "Got it. I'm updating your care journey."
+            if active_journey_id
+            else "I can help with that. I'm checking what I need."
         )
+        await ws.send_json({
+            "type": "transcript", "role": "assistant", "text": acknowledgement,
+            "utterance_id": turn_id, "session_id": session_id,
+        })
+        await ws.send_json({"type": "processing", "stage": "speaking"})
+        await _stream_magpie(ws, speech, acknowledgement)
+        await ws.send_json({"type": "processing", "stage": "reasoning"})
+        result = await care_task
         journey = result.get("journey")
         if isinstance(journey, dict) and journey.get("journey_id"):
             active_journey_id = str(journey["journey_id"])

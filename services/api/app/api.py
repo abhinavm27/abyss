@@ -377,17 +377,28 @@ def _prepare_chat_care_options(journey: CareJourney) -> bool:
     return True
 
 
-def _care_options_reply(journey: CareJourney) -> str:
+def _care_options_reply(journey: CareJourney, *, voice: bool = False) -> str:
     """Lead with the useful result and the next safe action."""
     count = len(journey.current_plan_options)
     plan_name = journey.catalogs.plan(journey.current_plan_id).name
     if not count:
+        if voice:
+            return (
+                f"I matched the order to your current {plan_name}, but I don't have "
+                "published hospital rates for it yet. I've kept the journey ready."
+            )
         return (
             f"I resolved the order under your current {plan_name}, but the catalog has no "
             "published hospital rates for it yet. I kept the journey ready so we can add "
             "catalog coverage without changing your insurance."
         )
     best = journey.current_plan_options[0]
+    if voice:
+        return (
+            f"I found {count} current-plan hospital options. {best.hospital} has the "
+            f"lowest estimated member-cost scenario at about "
+            f"${best.estimated_member_cost:,.0f}. I've opened the comparison."
+        )
     return (
         f"Done — I found {count} hospital options under your current {plan_name}. "
         f"The lowest current-plan scenario is {best.hospital} at about "
@@ -396,11 +407,28 @@ def _care_options_reply(journey: CareJourney) -> str:
     )
 
 
-def _intake_reply(journey: CareJourney, *, continuing: bool) -> str:
+def _intake_reply(
+    journey: CareJourney, *, continuing: bool, voice: bool = False
+) -> str:
     questions = list(dict.fromkeys(journey.onboarding_questions))
     if not questions:
         return "I have the intake details. I’m checking your current-plan hospital options now."
     lead = "Thanks — I saved that." if continuing else "Absolutely — I can help with that."
+    if voice:
+        # Spoken turns should ask one thing at a time. Procedure specificity is
+        # needed to query the catalog, so ask it before timing or coverage.
+        priorities = (
+            "body area and specific type",
+            "which blood test",
+            "without contrast or with contrast",
+            "date do you expect",
+            "coverage end",
+        )
+        question = next(
+            (item for key in priorities for item in questions if key in item.lower()),
+            questions[0],
+        )
+        return f"{lead} {question}"
     if len(questions) == 1:
         return f"{lead} {questions[0]}"
     return (
@@ -621,6 +649,7 @@ def care_agent_message(
     utterance_id = body.utterance_id or f"utterance-{uuid.uuid4().hex[:12]}"
     correlation_id = body.correlation_id or f"correlation-{uuid.uuid4().hex[:12]}"
     plan = None
+    voice = body.channel == "voice"
     try:
         plan = (
             _care_journey_agent.pending_reply_plan(
@@ -652,9 +681,9 @@ def care_agent_message(
                 ))
             journey.onboard(body.text, source="care_journey_agent")
             if _prepare_chat_care_options(journey):
-                reply = _care_options_reply(journey)
+                reply = _care_options_reply(journey, voice=voice)
             else:
-                reply = _intake_reply(journey, continuing=False)
+                reply = _intake_reply(journey, continuing=False, voice=voice)
         elif plan.intent == JourneyIntent.CONTINUE_JOURNEY:
             if journey is None:
                 journey = _restore_intake_journey(
@@ -673,9 +702,9 @@ def care_agent_message(
                     prefer_explicit=plan.source == "explicit_pending_reply",
                 )
                 if _prepare_chat_care_options(journey):
-                    reply = _care_options_reply(journey)
+                    reply = _care_options_reply(journey, voice=voice)
                 else:
-                    reply = _intake_reply(journey, continuing=True)
+                    reply = _intake_reply(journey, continuing=True, voice=voice)
             elif (
                 journey.stage.value == "book"
                 and not journey.reschedule_original_slot
@@ -794,6 +823,14 @@ def _voice_care_turn(
     conn = db.connect()
     db.init_db(conn)
     try:
+        context = _user_care_context(conn, user_id)
+        reply_plan = _care_journey_agent.explicit_pending_reply_plan(
+            text,
+            context,
+            active_journey_id,
+            utterance_id=utterance_id,
+            correlation_id=correlation_id,
+        )
         return care_agent_message(
             CareAgentMessageIn(
                 text=text,
@@ -801,6 +838,7 @@ def _voice_care_turn(
                 utterance_id=utterance_id,
                 correlation_id=correlation_id,
                 channel="voice",
+                reply_to_pending=reply_plan is not None,
             ),
             conn=conn,
             user_id=user_id,
