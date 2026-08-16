@@ -1137,7 +1137,7 @@ export function VelaExperience() {
             )}
             {scene === "complete" && journey && <CompleteCard journey={journey} onAppointments={() => setTab("appointments")} onReset={reset} />}
           </div>
-          {["listening", "documents"].includes(scene) && <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleInsuranceFiles([file]))} onUpload={handleInsuranceFiles} />}
+          <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleInsuranceFiles([file]))} onUpload={handleInsuranceFiles} />
           {insuranceScan && <InsuranceScanReview scan={insuranceScan} onClose={() => setInsuranceScan(null)} />}
           {notice && (
             <div className="vela-notice">
