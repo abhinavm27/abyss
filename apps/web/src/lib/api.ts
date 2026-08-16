@@ -742,9 +742,10 @@ export const api = {
     return r.json() as Promise<SbcResult>;
   },
 
-  scanCard: async (file: File) => {
+  scanCard: async (file: File, extractedText?: string) => {
     const form = new FormData();
     form.append("file", file);
+    if (extractedText) form.append("extracted_text", extractedText);
     const r = await fetch(`${BASE}/api/insurance/scan`, {
       method: "POST",
       headers: token ? { authorization: `Bearer ${token}` } : {},

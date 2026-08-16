@@ -1,41 +1,22 @@
-"""Read an insurance card photo.
+"""Parse OCR text from a synthetic health-insurance member ID card.
 
-What a card actually carries is narrow, and being honest about that is the whole
-design. The front of a member ID card gives the payer, a plan or product name,
-the member and group numbers, and sometimes a handful of copays. It does **not**
-give the deductible, the out-of-pocket maximum, or the coinsurance rate — the
-three figures every estimate in ABYSS depends on.
-
-So a scan identifies the plan and hands off to the Summary of Benefits. It never
-invents the numbers it cannot see: a model asked for a deductible will happily
-produce a plausible one, and a plausible deductible is exactly the kind of
-confident wrong answer this app exists to avoid.
+The browser performs OCR on-device and sends the recognized text beside the
+image. This parser only transcribes labeled values; it never invents benefits
+that are not printed on the card and it does not send member identifiers to a
+hosted vision model.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-
-from ..config import gemini_api_key
-
-MODEL = "gemini-2.5-flash"
-
-PROMPT = """You are reading a photograph of a health insurance member ID card.
-
-Return ONLY what is printed on the card. Rules:
-- If a field is not visibly printed, return null. Never infer or complete it.
-- Do not guess the deductible, out-of-pocket maximum or coinsurance. Cards
-  almost never show these. Returning null is the correct answer.
-- copays: only those actually printed, with the label used on the card.
-- Transcribe member and group numbers exactly, including letters.
-"""
 
 
 @dataclass
 class CardResult:
     payer_name: str | None = None
     plan_name: str | None = None
-    plan_type: str | None = None  # HMO | PPO | EPO | POS
+    plan_type: str | None = None
     member_id: str | None = None
     group_number: str | None = None
     rx_bin: str | None = None
@@ -52,90 +33,86 @@ class CardResult:
             "rx_bin": self.rx_bin,
             "copays": self.copays,
             "warnings": self.warnings,
-            # Stated in the payload rather than only in the UI, so any client
-            # reading this cannot mistake a scan for a full plan.
             "provides_cost_sharing": False,
         }
 
 
-_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "payer_name": {"type": "STRING", "nullable": True},
-        "plan_name": {"type": "STRING", "nullable": True},
-        "plan_type": {"type": "STRING", "nullable": True},
-        "member_id": {"type": "STRING", "nullable": True},
-        "group_number": {"type": "STRING", "nullable": True},
-        "rx_bin": {"type": "STRING", "nullable": True},
-        "copays": {
-            "type": "ARRAY",
-            "items": {
-                "type": "OBJECT",
-                "properties": {"label": {"type": "STRING"}, "amount": {"type": "NUMBER"}},
-                "required": ["label", "amount"],
-            },
-        },
-    },
-}
+def _clean(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" :#|-")
 
 
-def parse(image_bytes: bytes, mime_type: str = "image/jpeg") -> CardResult:
-    """Extract what is printed on an insurance card."""
+def _labeled(text: str, labels: tuple[str, ...]) -> str | None:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    match = re.search(
+        rf"(?im)^\s*(?:{label_pattern})\s*(?:id|number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9 .&'/-]{{2,}})\s*$",
+        text,
+    )
+    return _clean(match.group(1)) if match else None
+
+
+def parse_text(text: str) -> CardResult:
     result = CardResult()
-    if not image_bytes:
-        result.warnings.append("no image was received")
+    source = text.replace("\r", "\n")
+    normalized = "\n".join(_clean(line) for line in source.splitlines() if _clean(line))
+    if not normalized:
+        result.warnings.append("No readable text was found on the card image")
         return result
 
-    api_key = gemini_api_key()
-    if not api_key:
-        # Same shape as the SBC parser's behaviour: degrade with a plain
-        # explanation rather than failing in a way that looks like a bug.
-        result.warnings.append("GEMINI_API_KEY is not configured, so the card was not read")
-        return result
+    result.member_id = _labeled(normalized, ("member", "member id", "subscriber id", "id"))
+    result.group_number = _labeled(normalized, ("group", "group number", "group no"))
+    result.rx_bin = _labeled(normalized, ("rx bin", "rxbin", "bin"))
+    result.plan_name = _labeled(normalized, ("plan", "product", "network"))
 
-    from google import genai
-    from google.genai import types
+    plan_type = re.search(r"(?i)\b(PPO|HMO|EPO|POS|HDHP)\b", normalized)
+    result.plan_type = plan_type.group(1).upper() if plan_type else None
 
-    client = genai.Client(api_key=api_key)
-    try:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                types.Part(text=PROMPT),
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=_SCHEMA,
-                temperature=0,
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001 - surfaced to the member, not raised
-        result.warnings.append(f"the card could not be read: {exc}")
-        return result
+    payer_patterns = (
+        r"\bPremera(?: Blue Cross)?\b",
+        r"\bRegence(?: BlueShield)?\b",
+        r"\bUnitedHealthcare\b",
+        r"\bBlue Cross(?: Blue Shield)?\b",
+        r"\bAetna\b",
+        r"\bCigna\b",
+        r"\bKaiser Permanente\b",
+        r"\bMolina Healthcare\b",
+        r"\bHumana\b",
+    )
+    for pattern in payer_patterns:
+        match = re.search(pattern, normalized, re.IGNORECASE)
+        if match:
+            result.payer_name = _clean(match.group(0))
+            break
+    if result.payer_name is None:
+        result.payer_name = _labeled(normalized, ("payer", "carrier", "insurer"))
 
-    import json
+    for match in re.finditer(
+        r"(?im)^\s*([A-Za-z][A-Za-z /&-]{2,30}?(?:copay|visit|care|office|specialist|emergency|urgent))\s*[:$ ]+\$?\s*(\d{1,4}(?:\.\d{1,2})?)\s*$",
+        normalized,
+    ):
+        result.copays[_clean(match.group(1))] = float(match.group(2))
 
-    try:
-        data = json.loads(response.text or "{}")
-    except json.JSONDecodeError:
-        result.warnings.append("the card could not be read")
-        return result
-
-    result.payer_name = data.get("payer_name") or None
-    result.plan_name = data.get("plan_name") or None
-    result.plan_type = (data.get("plan_type") or "").upper() or None
-    result.member_id = data.get("member_id") or None
-    result.group_number = data.get("group_number") or None
-    result.rx_bin = data.get("rx_bin") or None
-    for entry in data.get("copays") or []:
-        label = str(entry.get("label") or "").strip()
-        if label:
-            result.copays[label] = float(entry.get("amount") or 0)
-
-    if not result.payer_name and not result.plan_name:
+    if not any((result.payer_name, result.plan_name, result.member_id, result.group_number)):
         result.warnings.append(
-            "Nothing readable was found on this image. A straight-on photo of the front of the "
-            "card, in good light, works best."
+            "No labeled insurance details were recognized. Retake a straight-on photo of the card front in good light."
         )
+    result.warnings.append(
+        "An insurance card identifies the plan but does not provide the deductible, out-of-pocket maximum, or coinsurance."
+    )
     return result
+
+
+def parse(
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    *,
+    extracted_text: str | None = None,
+) -> CardResult:
+    """Parse browser-supplied OCR text while validating that an image exists."""
+    del mime_type
+    if not image_bytes:
+        return CardResult(warnings=["No image was received"])
+    if not extracted_text or not extracted_text.strip():
+        return CardResult(warnings=[
+            "The card image was received, but no readable on-device OCR text was supplied."
+        ])
+    return parse_text(extracted_text)

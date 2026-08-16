@@ -532,6 +532,24 @@ button { color: inherit; }
 .vela-chat-document-dock svg { width: 18px; }
 .vela-chat-document-dock small { font-size: 8px; }
 
+.vela-insurance-review { position: absolute; z-index: 18; top: 50%; right: 108px; width: min(350px,calc(100% - 130px)); padding: 18px; border: 1px solid rgba(24,92,137,.17); border-radius: 20px; color: #173a59; background: rgba(252,254,252,.88); box-shadow: 0 24px 70px rgba(24,63,90,.16); backdrop-filter: blur(24px); transform: translateY(-50%); animation: vela-message-in .35s ease both; }
+.vela-insurance-review header { display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid rgba(28,87,128,.1); }
+.vela-insurance-review header span { display:flex;align-items:center;gap:8px;font:600 12px var(--vela-sans);letter-spacing:.02em; }
+.vela-insurance-review header span svg { width:18px;color:#1680ca; }
+.vela-insurance-review header button { display:grid;place-items:center;width:27px;height:27px;border:0;border-radius:50%;color:#667f95;background:#edf3f5;cursor:pointer; }
+.vela-insurance-review header button svg { width:13px; }
+.vela-insurance-review dl { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin:15px 0; }
+.vela-insurance-review dl div { min-width:0;padding:10px;border-radius:11px;background:rgba(232,242,245,.62); }
+.vela-insurance-review dt { margin-bottom:4px;color:#718498;font-size:8px;letter-spacing:.08em;text-transform:uppercase; }
+.vela-insurance-review dd { overflow:hidden;margin:0;font-size:11px;font-weight:600;text-overflow:ellipsis;white-space:nowrap; }
+.vela-insurance-review > p { margin:16px 0;color:#6c7e8e;font-size:10px;line-height:1.55; }
+.vela-insurance-copays { display:grid;gap:6px;margin:0 0 13px; }
+.vela-insurance-copays span { display:flex;justify-content:space-between;color:#667c8e;font-size:9px; }
+.vela-insurance-copays b { color:#173a59; }
+.vela-insurance-review footer { display:grid;grid-template-columns:20px 1fr;gap:8px;padding-top:12px;border-top:1px solid rgba(28,87,128,.1); }
+.vela-insurance-review footer svg { width:17px;color:#1da788; }
+.vela-insurance-review footer p { margin:0;color:#647b8d;font-size:8px;line-height:1.55; }
+
 @media (min-width: 761px) {
   .scene-recommendation .vela-stage-content { padding-left: 4%; padding-right: 37%; }
   .scene-recommendation .vela-stage h1 { margin-left: 0; }
@@ -679,6 +697,8 @@ button { color: inherit; }
   .vela-chat-document-dock > span { display: none; }
   .vela-chat-document-dock button { width: 48px; height: 48px; }
   .vela-chat-document-dock small { display: none; }
+  .vela-insurance-review { position:fixed;z-index:40;top:auto;right:12px;bottom:calc(82px + env(safe-area-inset-bottom));left:12px;width:auto;transform:none; }
+  .vela-insurance-review dl { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 
 @media (max-width: 370px) {

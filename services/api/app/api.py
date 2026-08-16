@@ -1481,7 +1481,9 @@ async def parse_sbc(file: UploadFile = File(...)):
 
 @app.post("/api/insurance/scan")
 async def scan_card(
-    file: UploadFile = File(...), user_id: int = Depends(require_user)
+    file: UploadFile = File(...),
+    extracted_text: str | None = Form(default=None),
+    user_id: int = Depends(require_user),
 ):
     """Read a photo of an insurance card.
 
@@ -1491,10 +1493,18 @@ async def scan_card(
     """
     from .ingest import card
 
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=415, detail="please upload an image of the insurance card")
+    if extracted_text is not None and len(extracted_text) > 50_000:
+        raise HTTPException(status_code=413, detail="recognized card text is too large")
     data = await file.read()
     if len(data) > 12_000_000:
         raise HTTPException(status_code=413, detail="that image is too large")
-    result = card.parse(data, file.content_type or "image/jpeg")
+    result = card.parse(
+        data,
+        file.content_type or "image/jpeg",
+        extracted_text=extracted_text,
+    )
     return {"filename": file.filename, **result.as_dict()}
 
 

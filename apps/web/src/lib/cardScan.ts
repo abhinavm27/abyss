@@ -37,3 +37,17 @@ export async function captureCard(): Promise<File | null> {
     input.click();
   });
 }
+
+/** OCR stays in the browser so printed member identifiers are not sent to a
+ * hosted vision model. The authenticated API receives the image and recognized
+ * text together, then deterministically validates labeled card fields. */
+export async function extractCardText(file: File): Promise<string> {
+  const { createWorker } = await import("tesseract.js");
+  const worker = await createWorker("eng");
+  try {
+    const result = await worker.recognize(file);
+    return result.data.text.trim();
+  } finally {
+    await worker.terminate();
+  }
+}

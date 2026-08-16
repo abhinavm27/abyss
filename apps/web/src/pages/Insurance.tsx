@@ -8,7 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { captureCard } from "@/lib/cardScan";
+import { captureCard, extractCardText } from "@/lib/cardScan";
 import { api, money, type CardScan, type MyPlan, type PlanComparison } from "@/lib/api";
 
 /** Insurance: the plans you hold, and what they actually cost you.
@@ -46,7 +46,8 @@ export function Insurance({
     if (!file) return;
     setScanning(true);
     try {
-      setScan(await api.scanCard(file));
+      const extractedText = await extractCardText(file);
+      setScan(await api.scanCard(file, extractedText));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

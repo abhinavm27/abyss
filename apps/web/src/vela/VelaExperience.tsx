@@ -1,8 +1,8 @@
 import { Building2, CalendarDays, Camera, Check, CircleEllipsis, FileText, Home, LockKeyhole, Menu, MessageCircle, Mic, Network, Phone, Send, Settings, ShieldCheck, Sparkles, Upload, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, getToken, type CareAgentResponse, type CareContext, type CareJourneySnapshot } from "@/lib/api";
+import { api, getToken, type CardScan, type CareAgentResponse, type CareContext, type CareJourneySnapshot } from "@/lib/api";
 import { VOICE_LABEL, useVoiceSession } from "@/hooks/useVoiceSession";
-import { captureCard } from "@/lib/cardScan";
+import { captureCard, extractCardText } from "@/lib/cardScan";
 import { SECURE_APP_URL } from "@/lib/voiceConfig";
 import { voiceStartErrorMessage } from "@/lib/voiceErrors";
 import { NeuralPath } from "@/vela/NeuralPath";
@@ -511,18 +511,48 @@ function ChatPanel({ turns, value, busy, busyLabel, suggestions, onValue, onSend
 function ChatDocumentDock({ busy, onCamera, onUpload }: DocumentPromptProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   return (
-    <aside className="vela-chat-document-dock" aria-label="Add a care order">
-      <span>Care order</span>
-      <button type="button" onClick={onCamera} disabled={busy} aria-label="Scan and analyze care order">
+    <aside className="vela-chat-document-dock" aria-label="Add insurance">
+      <span>Insurance</span>
+      <button type="button" onClick={onCamera} disabled={busy} aria-label="Scan insurance card">
         <Camera />
-        <small>Scan order</small>
+        <small>Scan card</small>
       </button>
-      <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="Upload and analyze care order">
+      <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="Upload insurance card">
         <Upload />
-        <small>Upload order</small>
+        <small>Upload insurance</small>
       </button>
-      <input ref={inputRef} type="file" accept="image/*,.pdf,application/pdf" hidden onChange={(event) => onUpload(event.target.files)} />
+      <input ref={inputRef} type="file" accept="image/*" hidden onChange={(event) => onUpload(event.target.files)} />
     </aside>
+  );
+}
+
+function InsuranceScanReview({ scan, onClose }: { scan: CardScan; onClose: () => void }) {
+  const fields: Array<[string, string | null]> = [
+    ["Payer", scan.payer_name],
+    ["Plan", scan.plan_name],
+    ["Plan type", scan.plan_type],
+    ["Member ID", scan.member_id],
+    ["Group", scan.group_number],
+    ["Rx BIN", scan.rx_bin],
+  ];
+  const visibleFields = fields.filter((field): field is [string, string] => typeof field[1] === "string" && field[1].length > 0);
+  return (
+    <section className="vela-insurance-review" aria-label="Parsed insurance card details">
+      <header>
+        <span><WalletCards /> Insurance card read</span>
+        <button onClick={onClose} aria-label="Close insurance details"><X /></button>
+      </header>
+      {visibleFields.length ? (
+        <dl>{visibleFields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+      ) : <p>No labeled insurance fields were readable. Retake the card in even light with all four corners visible.</p>}
+      {Object.keys(scan.copays).length > 0 && (
+        <div className="vela-insurance-copays">{Object.entries(scan.copays).map(([label, amount]) => <span key={label}>{label}<b>${amount.toLocaleString()}</b></span>)}</div>
+      )}
+      <footer>
+        <ShieldCheck />
+        <p>A card identifies your plan. Upload the Summary of Benefits separately for deductible, coinsurance, and out-of-pocket limits.</p>
+      </footer>
+    </section>
   );
 }
 
@@ -552,6 +582,7 @@ export function VelaExperience() {
   const [matchingReason, setMatchingReason] = useState<string | null>(null);
   const [bookingText, setBookingText] = useState("2026-08-30 to 2026-09-15, any time");
   const [notice, setNotice] = useState<string | null>(null);
+  const [insuranceScan, setInsuranceScan] = useState<CardScan | null>(null);
   const [chatValue, setChatValue] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatProgressIndex, setChatProgressIndex] = useState(0);
@@ -740,6 +771,7 @@ export function VelaExperience() {
     setJourney(null);
     setNotice(null);
     setMatchingReason(null);
+    setInsuranceScan(null);
     setChatStarted(false);
     setChatVisualProgress(0);
     setVoiceStarted(false);
@@ -844,6 +876,44 @@ export function VelaExperience() {
     } catch (error) {
       setDocuments((items) => items.map((item) => (item.status === "Processing" ? { ...item, status: "Review needed" } : item)));
       setNotice(error instanceof Error ? error.message : "VELA could not read that care order.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleInsuranceFiles = async (files: FileList | File[] | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setNotice("Choose a photo of the front of your insurance card. Summary of Benefits PDFs belong in Documents.");
+      return;
+    }
+    setBusy(true);
+    setInsuranceScan(null);
+    setNotice("Reading printed insurance-card details on this device…");
+    const documentId = crypto.randomUUID();
+    setDocuments((items) => [{
+      id: documentId,
+      name: file.name,
+      kind: "Insurance card",
+      status: "Processing",
+      added: "Just now",
+      preview: URL.createObjectURL(file),
+    }, ...items]);
+    try {
+      const extractedText = await extractCardText(file);
+      setNotice("Structuring labeled insurance fields…");
+      const result = await api.scanCard(file, extractedText);
+      setInsuranceScan(result);
+      const readable = Boolean(result.payer_name || result.plan_name || result.member_id || result.group_number);
+      setDocuments((items) => items.map((item) => item.id === documentId ? {
+        ...item,
+        status: readable ? "Verified" : "Review needed",
+      } : item));
+      setNotice(readable ? "Insurance card parsed. Review the extracted details." : result.warnings[0] || "No insurance details were readable.");
+    } catch (error) {
+      setDocuments((items) => items.map((item) => item.id === documentId ? { ...item, status: "Review needed" } : item));
+      setNotice(error instanceof Error ? error.message : "VELA could not read that insurance card.");
     } finally {
       setBusy(false);
     }
@@ -1067,7 +1137,8 @@ export function VelaExperience() {
             )}
             {scene === "complete" && journey && <CompleteCard journey={journey} onAppointments={() => setTab("appointments")} onReset={reset} />}
           </div>
-          {["listening", "documents"].includes(scene) && <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleFiles([file]))} onUpload={handleFiles} />}
+          {["listening", "documents"].includes(scene) && <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleInsuranceFiles([file]))} onUpload={handleInsuranceFiles} />}
+          {insuranceScan && <InsuranceScanReview scan={insuranceScan} onClose={() => setInsuranceScan(null)} />}
           {notice && (
             <div className="vela-notice">
               <span>{notice}</span>
