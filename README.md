@@ -235,7 +235,7 @@ Key references:
 | Team member | Role | Contact |
 | --- | --- | --- |
 | Abishek Muralikrishna | AI Systems and NVIDIA Integration Lead | [Email](mailto:Abishek.bm@gmail.com) |
-| Abhinav Ravindran | Backend and Healthcare Data Engineering Lead | [Email](mailto:abhinav.ravindran27@gmail.com) |
+| Abhinav Ravindran | Agentic Systems and Backend Architecture Lead | [Email](mailto:abhinav.ravindran27@gmail.com) |
 | Fatima Aguilar | Product, UX, and Frontend Lead | [Email](mailto:fsaguilar16@gmail.com) |
 
 ## Submission links
