@@ -24,14 +24,16 @@ from abyss.care_paths import CarePathSelection
 from abyss.hermes_client import HermesError
 from abyss.domain import ConsentAction, DecisionFact, VerificationStatus
 from abyss.journey import CareJourney
-from abyss.knowledge import SQLiteHospitalKnowledgeCatalog
 from abyss.memory import PersistentMemoryStore
 from abyss.procedures import ProcedureResolution
+from abyss.report_intake import ReportAnalysis, ReportIntakeService
 from abyss.workflow import WorkflowStage
 
 from . import auth, db, retrieval
+from .config import hospital_knowledge_catalog
 from .memory_routes import build_memory_router
 from .messaging_routes import build_messaging_router
+from .report_routes import build_report_intake_router
 from .discord_routes import build_discord_router
 from .ingest import sbc
 from .estimator import Plan, estimate
@@ -46,6 +48,8 @@ app = FastAPI(title="VELA", version="0.1.0")
 _journeys: dict[str, CareJourney] = {}
 _booking_worker_stop = Event()
 _care_journey_agent = CareJourneyAgent()
+_hospital_knowledge = hospital_knowledge_catalog()
+_report_intake = ReportIntakeService()
 
 
 def _booking_task_worker() -> None:
@@ -71,10 +75,7 @@ def stop_booking_task_worker() -> None:
 
 def _journey_dependencies() -> dict:
     """Build adapters without coupling the journey domain to FastAPI."""
-    knowledge_db = os.getenv("ABYSS_KNOWLEDGE_DB")
-    if not knowledge_db:
-        return {}
-    return {"hospital_knowledge": SQLiteHospitalKnowledgeCatalog(knowledge_db)}
+    return {"hospital_knowledge": _hospital_knowledge}
 
 
 @app.websocket("/ws")
@@ -424,6 +425,64 @@ def _care_options_reply(journey: CareJourney, *, voice: bool = False) -> str:
         f"${best.estimated_member_cost:,.0f} member cost. I opened the comparison; "
         "network verification happens only after you choose a hospital."
     )
+
+
+def _attach_confirmed_report(analysis: ReportAnalysis, actor: object) -> dict:
+    """Make user-confirmed report orders authoritative journey facts."""
+    user_id = int(actor)
+    conn = db.connect()
+    db.init_db(conn)
+    try:
+        journey = _owned_journey(analysis.journey_id, user_id)
+        if journey is None and analysis.journey_id:
+            journey = _restore_intake_journey(conn, analysis.journey_id, user_id)
+        if journey is None and analysis.journey_id:
+            raise HTTPException(status_code=404, detail="that care journey was not found")
+        if journey is None:
+            journey = _open_journey(user_id, seed_defaults=False)
+        if journey.stage.value != "intake":
+            raise HTTPException(
+                status_code=409,
+                detail="confirmed report orders can only be added during journey intake",
+            )
+
+        journey.record_consent(
+            analysis.consent.action,
+            approved=analysis.consent.approved,
+            scope=analysis.consent.scope,
+            actor=f"user:{user_id}",
+        )
+        order_ids: list[str] = []
+        for confirmed in analysis.confirmed_orders:
+            order_ids.append(confirmed.order.order_id)
+            for fact in confirmed.facts:
+                journey.record_fact(fact)
+        options_ready = _prepare_chat_care_options(journey)
+        journey.audit.append(
+            journey.journey_id,
+            "report_orders_confirmed",
+            actor="user",
+            payload={
+                "analysis_id": analysis.analysis_id,
+                "source_hash": analysis.source_hash,
+                "order_ids": order_ids,
+                "options_ready": options_ready,
+            },
+        )
+        return {
+            "analysis": analysis.as_dict(),
+            "options_ready": options_ready,
+            "journey": _journey_payload(journey),
+        }
+    finally:
+        conn.close()
+
+
+app.include_router(build_report_intake_router(
+    _report_intake,
+    actor_dependency=require_user,
+    confirmed_handler=_attach_confirmed_report,
+))
 
 
 def _intake_reply(

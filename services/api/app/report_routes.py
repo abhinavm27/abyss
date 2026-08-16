@@ -17,6 +17,7 @@ from abyss.report_intake import (
     ExtractedPage,
     ReportIntakeError,
     ReportIntakeService,
+    ReportAnalysis,
     ReportSchemaError,
 )
 
@@ -91,6 +92,7 @@ def build_report_intake_router(
     service: ReportIntakeService,
     *,
     actor_dependency: Callable[..., Any],
+    confirmed_handler: Callable[[ReportAnalysis, Any], dict[str, Any]] | None = None,
 ) -> APIRouter:
     """Build a router whose parent supplies its authenticated-user dependency."""
 
@@ -151,12 +153,17 @@ def build_report_intake_router(
         actor: Any = Depends(actor_dependency),  # noqa: B008
     ):
         try:
-            return service.confirm_orders(
+            confirmed = service.confirm_orders(
                 analysis_id,
                 body.order_ids,
                 actor=str(actor),
                 journey_id=body.journey_id,
-            ).as_dict()
+            )
+            return (
+                confirmed_handler(confirmed, actor)
+                if confirmed_handler is not None
+                else confirmed.as_dict()
+            )
         except Exception as error:
             raise _safe_http_error(error) from error
 

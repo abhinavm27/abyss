@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
@@ -51,6 +52,63 @@ class NewJourneyStartTests(unittest.TestCase):
                     [item["journey_id"] for item in context.json()["journeys"]],
                     [started_id],
                 )
+            _journeys.clear()
+
+    def test_confirmed_report_facts_attach_to_one_owned_journey(self) -> None:
+        from abyss.report_intake import ExtractedPage, ReportIntakeService
+        from services.api.app import db
+        from services.api.app.api import _attach_confirmed_report, _journeys
+
+        report = "Plan: MRI right knee without contrast, CPT 73721."
+        extracted = json.dumps({"orders": [{
+            "service_name": "MRI right knee without contrast",
+            "service_code": "73721",
+            "source_quote": report,
+            "source_page": 1,
+            "confidence": 0.99,
+        }]})
+        service = ReportIntakeService(extractor=lambda _pages: extracted)
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"ABYSS_DB": str(Path(directory) / "report-journey.db")},
+            clear=False,
+        ):
+            conn = db.connect()
+            db.init_db(conn)
+            conn.execute(
+                """INSERT INTO user (id,email,password_hash,salt,created_at)
+                   VALUES (7,'report-journey@example.test','x','y','now')"""
+            )
+            conn.commit()
+            conn.close()
+
+            document = service.prepare_document(
+                report.encode(), source_name="synthetic-referral.txt", media_type="text/plain"
+            )
+            authorization = service.authorize(
+                document,
+                consent_scope=document.consent_scope,
+                approved=True,
+                actor="7",
+            )
+            analysis = service.analyze_authorized(
+                authorization, [ExtractedPage(1, report)]
+            )
+            confirmed = service.confirm_orders(
+                analysis.analysis_id, ["order-1"], actor="7"
+            )
+            result = _attach_confirmed_report(confirmed, 7)
+
+            self.assertEqual(result["analysis"]["source_hash"], document.source_hash)
+            self.assertEqual(len(_journeys), 1)
+            fact_names = {fact["name"] for fact in result["journey"]["facts"]}
+            self.assertIn("requested_procedure", fact_names)
+            self.assertIn("procedure_code", fact_names)
+            self.assertTrue(any(
+                event["type"] == "report_orders_confirmed"
+                for event in result["journey"]["events"]
+            ))
             _journeys.clear()
 
 
