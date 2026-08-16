@@ -136,7 +136,7 @@ nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
 ### Requirements
 
 - Python 3.11 or newer
-- Node.js 20 or newer
+- Node.js 22 or newer (the pinned version is in `.nvmrc`)
 - npm
 - Optional authorized access to the team DGX Spark for live Nemotron explanations
 
@@ -145,7 +145,6 @@ nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
 ```bash
 git clone https://github.com/abhinavm27/abyss.git
 cd abyss
-git switch codex/migrate-implementation
 cp .env.example .env
 ```
 
@@ -240,6 +239,7 @@ insurance network participation or a guaranteed member out-of-pocket price.
 
 ```text
 apps/web/                  React, Vite, and Capacitor user experience
+.github/workflows/ci.yml   Repeatable backend, frontend, and security checks
 services/api/              FastAPI, document ingestion, pricing, and journey API
 src/abyss/                 Deterministic domain, agents, workflow, and adapters
 scenarios/wa_mri/          Seeded synthetic golden path fixture
@@ -254,16 +254,16 @@ tests/                     Deterministic unit and vertical slice tests
 
 ## Team VELA
 
-| Team member | Role |
-| --- | --- |
-| Abishek Muralikrishna | Role and contact to be confirmed |
-| Abhinav Ravindran | Role and contact to be confirmed |
-| Fatima Aguilar | Role and contact to be confirmed |
+| Team member | Role | Contact |
+| --- | --- | --- |
+| Abishek Muralikrishna | AI Systems and NVIDIA Integration Lead | [Abishek.bm@gmail.com](mailto:Abishek.bm@gmail.com), [508-904-9436](tel:+15089049436) |
+| Abhinav Ravindran | Backend and Healthcare Data Engineering Lead | [abhinav.ravindran27@gmail.com](mailto:abhinav.ravindran27@gmail.com) |
+| Fatima Aguilar | Product, UX, and Frontend Lead | [fsaguilar16@gmail.com](mailto:fsaguilar16@gmail.com), [978-242-2510](tel:+19782422510) |
 
 ## Submission links
 
-- Demo video: To be added
-- Deployed application: To be added
+- Demo video: Pending final recording and upload
+- Deployed application: [vela-care-path.fsaguilar16.chatgpt.site](https://vela-care-path.fsaguilar16.chatgpt.site/)
 - Repository: [github.com/abhinavm27/abyss](https://github.com/abhinavm27/abyss)
 
 ## License
