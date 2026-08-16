@@ -50,6 +50,7 @@ class NvidiaSpeechTests(unittest.TestCase):
             defaults = NvidiaSpeechConfig.from_env()
         self.assertEqual(defaults.output_sample_rate, 22_050)
         self.assertEqual(defaults.asr_base_url, "http://127.0.0.1:9001")
+        self.assertEqual(defaults.voice, "Magpie-Multilingual.EN-US.Mia.Neutral")
         with patch.dict(os.environ, {"NVIDIA_TTS_SAMPLE_RATE": "16000"}, clear=True):
             overridden = NvidiaSpeechConfig.from_env()
         self.assertEqual(overridden.output_sample_rate, 16_000)

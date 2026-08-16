@@ -71,7 +71,9 @@ class NvidiaSpeechConfig:
     asr_base_url: str = "http://127.0.0.1:9001"
     tts_base_url: str = "http://127.0.0.1:9002"
     language: str = "en-US"
-    voice: str = "Magpie-Multilingual.EN-US.Mia.Calm"
+    # Neutral is materially more conversational than Calm on the deployed
+    # Magpie NIM (about 4.0s versus 6.2s for the same test sentence).
+    voice: str = "Magpie-Multilingual.EN-US.Mia.Neutral"
     input_sample_rate: int = 16_000
     output_sample_rate: int = 22_050
     timeout_seconds: float = 60.0

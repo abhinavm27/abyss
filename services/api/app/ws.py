@@ -37,6 +37,7 @@ from . import auth, db, retrieval
 from .ingest import qhp
 from .estimator import Plan, estimate
 from .nvidia_speech import NvidiaSpeechClient, NvidiaSpeechError
+from abyss.voice_proactive import proactive_voice_prompt
 
 log = logging.getLogger(__name__)
 
@@ -341,6 +342,32 @@ def run_update_plan_usage(
 CareTurn = Callable[[str, str | None, int, str, str], dict[str, Any]]
 
 
+def _voice_journey_snapshot(conn, user_id: int, requested_journey_id: str | None) -> dict | None:
+    """Load the requested journey, otherwise the member's newest active one."""
+    if requested_journey_id:
+        row = conn.execute(
+            "SELECT payload_json FROM care_journey WHERE journey_id=? AND user_id=?",
+            (requested_journey_id, user_id),
+        ).fetchone()
+        if row:
+            try:
+                return json.loads(row["payload_json"])
+            except (json.JSONDecodeError, TypeError):
+                return None
+    row = conn.execute(
+        """SELECT payload_json FROM care_journey
+           WHERE user_id=? AND status='active'
+           ORDER BY updated_at DESC LIMIT 1""",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["payload_json"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 async def _stream_magpie(
     ws: WebSocket,
     speech: NvidiaSpeechClient,
@@ -495,6 +522,24 @@ async def voice_endpoint(
             "output_sample_rate": speech.config.output_sample_rate,
             "session_id": session_id,
         })
+        # Take the first conversational turn. This is derived only from the
+        # authenticated member's persisted journey projection, so it can guide
+        # the next step without guessing facts or executing an action.
+        opening = proactive_voice_prompt(
+            _voice_journey_snapshot(conn, user_id, requested_journey_id)
+        )
+        await ws.send_json({
+            "type": "transcript", "role": "assistant", "text": opening,
+            "session_id": session_id, "proactive": True,
+        })
+        await ws.send_json({"type": "processing", "stage": "speaking"})
+        try:
+            await _stream_magpie(ws, speech, opening)
+        except NvidiaSpeechError:
+            # A greeting should never make an otherwise healthy ASR session
+            # unusable. The visible transcript remains available as fallback.
+            log.warning("proactive voice greeting could not be synthesized", exc_info=True)
+        await ws.send_json({"type": "turn_complete", "proactive": True})
         while True:
             raw = await ws.receive_text()
             try:
