@@ -20,6 +20,16 @@ VELA is a **Do Track** prototype. It demonstrates an end-to-end workflow; it doe
 
 VELA targets the **Nemotron Lightning** and **NemoClaw and OpenShell** bounties.
 
+### What is working
+
+- Voice and document intake using seeded synthetic data
+- Three-path expected annual-cost comparison
+- Deterministic eligibility, medication, physician, provider, and network constraints
+- Exact-scope consent records for every consequential action
+- Controlled provider verification
+- Sandbox enrollment, coverage transition, appointment booking, and rescheduling
+- Idempotent receipts, bounded recovery, and an auditable journey history
+
 ## Three complete product journeys
 
 ### 1. Voice-first care navigation
