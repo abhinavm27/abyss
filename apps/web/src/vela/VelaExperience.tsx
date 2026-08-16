@@ -6,7 +6,7 @@ import { captureCard, extractCardText } from "@/lib/cardScan";
 import { SECURE_APP_URL } from "@/lib/voiceConfig";
 import { voiceStartErrorMessage } from "@/lib/voiceErrors";
 import { NeuralPath } from "@/vela/NeuralPath";
-import { AppointmentsTab, DocumentsTab, PathsTab, PreferencesTab, type VelaAppointment, type VelaDocument } from "@/vela/VelaTabs";
+import { AppointmentsTab, DocumentsTab, PathsTab, PreferencesTab, type ReferralIntakeReview, type VelaAppointment, type VelaDocument, type VelaDocumentKind } from "@/vela/VelaTabs";
 
 type AppTab = "home" | "paths" | "appointments" | "documents" | "preferences";
 
@@ -556,17 +556,6 @@ function InsuranceScanReview({ scan, onClose }: { scan: CardScan; onClose: () =>
   );
 }
 
-async function extractCareOrderImageText(file: File): Promise<string> {
-  const { createWorker } = await import("tesseract.js");
-  const worker = await createWorker("eng");
-  try {
-    const result = await worker.recognize(file);
-    return result.data.text.trim();
-  } finally {
-    await worker.terminate();
-  }
-}
-
 export function VelaExperience() {
   const mobile = useIsMobile();
   const liveMode = import.meta.env.VITE_LIVE_MODE === "true" && Boolean(getToken());
@@ -609,12 +598,14 @@ export function VelaExperience() {
           {
             id: "demo-referral",
             name: "Knee MRI referral.pdf",
-            kind: "Referral",
+            kind: "Referral/order",
             status: "Verified",
             added: "Aug 15",
           },
         ],
   );
+  const [referralReview, setReferralReview] = useState<ReferralIntakeReview | null>(null);
+  const referralFileRef = useRef<File | null>(null);
   const [appointments, setAppointments] = useState<VelaAppointment[]>(
     liveMode
       ? []
@@ -631,7 +622,6 @@ export function VelaExperience() {
           },
         ],
   );
-  const [cameraOpen, setCameraOpen] = useState(false);
   const adoptJourney = (next: CareJourneySnapshot, context?: CareContext) => {
     setJourney(next);
     if (context) setCareContext(context);
@@ -772,6 +762,8 @@ export function VelaExperience() {
     setNotice(null);
     setMatchingReason(null);
     setInsuranceScan(null);
+    setReferralReview(null);
+    referralFileRef.current = null;
     setChatStarted(false);
     setChatVisualProgress(0);
     setVoiceStarted(false);
@@ -853,42 +845,119 @@ export function VelaExperience() {
     }
   };
 
-  const handleFiles = async (files: FileList | File[] | null) => {
-    const file = files?.[0];
-    if (!file) return;
+  const addDocument = (file: File, kind: VelaDocumentKind, status: VelaDocument["status"] = "Processing") => {
+    const id = crypto.randomUUID();
+    setDocuments((items) => [{
+      id,
+      name: file.name,
+      kind,
+      status,
+      added: "Just now",
+      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+    }, ...items]);
+    return id;
+  };
+
+  const updateDocumentStatus = (documentId: string, status: VelaDocument["status"]) => {
+    setDocuments((items) => items.map((item) => item.id === documentId ? { ...item, status } : item));
+  };
+
+  const prepareReferral = async (file: File) => {
+    const documentId = addDocument(file, "Referral/order");
     setBusy(true);
-    setNotice(null);
+    setNotice("Preparing the referral without analyzing its contents…");
+    setReferralReview(null);
+    referralFileRef.current = file;
     try {
-      const newDocument: VelaDocument = {
-        id: crypto.randomUUID(),
-        name: file.name,
-        kind: "Referral",
-        status: "Processing",
-        added: "Just now",
-        preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
-      };
-      setDocuments((items) => [newDocument, ...items]);
-      if (liveMode) {
-        setNotice(file.type.startsWith("image/") ? "Reading the care order…" : "Extracting the care order…");
-        const extractedText = file.type.startsWith("image/") ? await extractCareOrderImageText(file) : undefined;
-        setNotice("Onboarding Agent is resolving the ordered procedure…");
-        const result = await api.analyzeCareOrder(
-          file,
-          journey?.stage === "intake" ? journey.journey_id : undefined,
-          extractedText,
-        );
-        adoptJourney(result.journey);
-        const reply = result.options_ready
-          ? `I extracted the order and found ${result.journey.current_plan_options.length} hospital options under your current plan.`
-          : result.journey.onboarding_questions.join(" ");
-        setChatTurns((turns) => [...turns, { role: "assistant", text: reply }]);
-        setNotice(result.options_ready ? "Care order analyzed. Current-plan hospital options are ready." : "Care order analyzed. I only need the missing details shown in the conversation.");
+      if (!liveMode) {
+        setDocuments((items) => items.map((item) => item.id === documentId ? { ...item, status: "Review needed" } : item));
+        setNotice("Sign in to prepare a hash-bound referral review.");
+        return;
       }
-      setDocuments((items) => items.map((item) => (item.id === newDocument.id ? { ...item, status: "Verified" } : item)));
-      if (!liveMode) setScene("understanding");
+      const prepared = await api.prepareReportIntake(file);
+      updateDocumentStatus(documentId, "Review needed");
+      setReferralReview({
+        documentId,
+        fileName: file.name,
+        prepared,
+        analysis: null,
+        selectedOrderIds: [],
+        phase: "consent",
+        error: null,
+      });
+      setNotice("Referral prepared. Review the exact permission before analysis.");
     } catch (error) {
-      setDocuments((items) => items.map((item) => (item.status === "Processing" ? { ...item, status: "Review needed" } : item)));
-      setNotice(error instanceof Error ? error.message : "VELA could not read that care order.");
+      updateDocumentStatus(documentId, "Review needed");
+      referralFileRef.current = null;
+      setNotice(error instanceof Error ? error.message : "VELA could not prepare that referral.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const analyzeReferral = async () => {
+    const file = referralFileRef.current;
+    if (!file || !referralReview) return;
+    setBusy(true);
+    setReferralReview((current) => current ? { ...current, phase: "analyzing", error: null } : current);
+    setNotice("Hermes is extracting only orders supported by an exact source quote…");
+    try {
+      const analysis = await api.analyzeReportIntake(
+        file,
+        referralReview.prepared.consent_scope,
+        journey?.stage === "intake" ? journey.journey_id : undefined,
+      );
+      setReferralReview((current) => current ? {
+        ...current,
+        analysis,
+        selectedOrderIds: [],
+        phase: "review",
+        error: null,
+      } : current);
+      setNotice(analysis.orders.length ? "Review the source-backed candidates and select the orders that apply." : "No explicit clinician order was found. Nothing was added to a journey.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "VELA could not analyze that referral.";
+      setReferralReview((current) => current ? { ...current, phase: "consent", error: message } : current);
+      setNotice(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleReferralOrder = (orderId: string) => {
+    setReferralReview((current) => {
+      if (!current || current.phase !== "review") return current;
+      const selected = current.selectedOrderIds.includes(orderId)
+        ? current.selectedOrderIds.filter((item) => item !== orderId)
+        : [...current.selectedOrderIds, orderId];
+      return { ...current, selectedOrderIds: selected };
+    });
+  };
+
+  const confirmReferralOrders = async () => {
+    if (!referralReview?.analysis || !referralReview.selectedOrderIds.length) return;
+    setBusy(true);
+    setReferralReview((current) => current ? { ...current, phase: "confirming", error: null } : current);
+    setNotice("Adding only the confirmed orders to your care journey…");
+    try {
+      const result = await api.confirmReportOrders(
+        referralReview.analysis.analysis_id,
+        referralReview.selectedOrderIds,
+        referralReview.analysis.journey_id,
+      );
+      adoptJourney(result.journey);
+      updateDocumentStatus(referralReview.documentId, "Verified");
+      setReferralReview((current) => current ? { ...current, analysis: result.analysis, phase: "confirmed", error: null } : current);
+      referralFileRef.current = null;
+      const reply = result.options_ready
+        ? `Your confirmed order is now part of this journey. I found ${result.journey.current_plan_options.length} current-plan hospital options.`
+        : `Your confirmed order is now part of this journey. ${result.journey.onboarding_questions.join(" ")}`;
+      setChatTurns((turns) => [...turns, { role: "assistant", text: reply.trim() }]);
+      setNotice(result.options_ready ? "Confirmed order added. Current-plan hospital options are ready." : "Confirmed order added to the journey with its source evidence.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "VELA could not confirm those orders.";
+      setReferralReview((current) => current ? { ...current, phase: "review", error: message } : current);
+      setNotice(message);
     } finally {
       setBusy(false);
     }
@@ -930,6 +999,45 @@ export function VelaExperience() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleDocumentUpload = async (kind: VelaDocumentKind, file: File) => {
+    if (kind === "Insurance card") {
+      await handleInsuranceFiles([file]);
+      return;
+    }
+    if (kind === "Referral/order") {
+      await prepareReferral(file);
+      return;
+    }
+    if (kind === "Summary of Benefits") {
+      const documentId = addDocument(file, kind);
+      setBusy(true);
+      setNotice("Reading plan benefits and cost-sharing fields…");
+      try {
+        if (!liveMode) {
+          updateDocumentStatus(documentId, "Review needed");
+          setNotice("Sign in to parse a Summary of Benefits.");
+          return;
+        }
+        const result = await api.parseSbc(file);
+        const hasPlanDetails = Boolean(result.plan_name || result.deductible !== null || result.oop_max !== null);
+        updateDocumentStatus(documentId, hasPlanDetails ? "Verified" : "Review needed");
+        const planLabel = result.plan_name ? `${result.plan_name}: ` : "";
+        setNotice(hasPlanDetails
+          ? `${planLabel}benefit fields extracted for review. This does not change your active plan.`
+          : result.warnings[0] || "No plan benefit fields were readable in that PDF.");
+      } catch (error) {
+        updateDocumentStatus(documentId, "Review needed");
+        setNotice(error instanceof Error ? error.message : "VELA could not read that Summary of Benefits.");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    addDocument(file, "Bill", "Review needed");
+    setNotice("Bill saved for review. VELA still needs the billed amount and service code before it can compare published rates; no values were inferred from the upload.");
   };
 
   const handleDecision = async () => {
@@ -1169,11 +1277,15 @@ export function VelaExperience() {
             <DocumentsTab
               documents={documents}
               onDocuments={setDocuments}
-              liveMode={liveMode}
-              openCamera={cameraOpen}
-              onOpenCamera={setCameraOpen}
-              onProcessFile={async (file) => {
-                await handleFiles([file]);
+              busy={busy}
+              referralReview={referralReview}
+              onUploadDocument={handleDocumentUpload}
+              onAnalyzeReferral={() => void analyzeReferral()}
+              onToggleReferralOrder={toggleReferralOrder}
+              onConfirmReferral={() => void confirmReferralOrders()}
+              onCloseReferral={() => {
+                setReferralReview(null);
+                referralFileRef.current = null;
               }}
             />
           )}

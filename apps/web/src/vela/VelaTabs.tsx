@@ -1,14 +1,26 @@
-import { Bell, Building2, CalendarDays, Camera, Check, ChevronRight, CircleDollarSign, Clock3, Download, FileText, HeartHandshake, Languages, MapPin, Network, Plus, ScanLine, ShieldCheck, Stethoscope, Trash2, Upload, X } from "lucide-react";
+import { Bell, Building2, CalendarDays, Check, ChevronRight, CircleDollarSign, Clock3, CreditCard, Download, FileCheck2, FileText, HeartHandshake, Languages, MapPin, Network, Plus, ReceiptText, ScanLine, ShieldCheck, Stethoscope, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, type CareContext, type CareJourneySnapshot, type MemberMemory, type MessagingPreference, type NotificationPreview } from "@/lib/api";
+import { api, type CareContext, type CareJourneySnapshot, type MemberMemory, type MessagingPreference, type NotificationPreview, type PreparedReportDocument, type ReportAnalysis } from "@/lib/api";
 
 export type VelaDocument = {
   id: string;
   name: string;
-  kind: "Insurance card" | "Summary of Benefits" | "Referral" | "Other";
+  kind: "Insurance card" | "Summary of Benefits" | "Referral/order" | "Bill";
   status: "Verified" | "Review needed" | "Processing";
   added: string;
   preview?: string;
+};
+
+export type VelaDocumentKind = VelaDocument["kind"];
+
+export type ReferralIntakeReview = {
+  documentId: string;
+  fileName: string;
+  prepared: PreparedReportDocument;
+  analysis: ReportAnalysis | null;
+  selectedOrderIds: string[];
+  phase: "consent" | "analyzing" | "review" | "confirming" | "confirmed";
+  error: string | null;
 };
 
 export type VelaAppointment = {
@@ -408,148 +420,191 @@ export function AppointmentsTab({ items, onItems, liveMode, journey, busy, booki
   );
 }
 
-export function CameraModal({ onCapture, onClose }: { onCapture: (file: File, preview: string) => void; onClose: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    void navigator.mediaDevices
-      ?.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      })
-      .then((stream) => {
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          void videoRef.current.play();
-        }
-      })
-      .catch(() => setError("Camera access is unavailable. You can upload a photo instead."));
-    return () => streamRef.current?.getTracks().forEach((track) => track.stop());
-  }, []);
-  const capture = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return;
-        const preview = URL.createObjectURL(blob);
-        onCapture(
-          new File([blob], `care-order-${Date.now()}.jpg`, {
-            type: "image/jpeg",
-          }),
-          preview,
-        );
-      },
-      "image/jpeg",
-      0.86,
-    );
-  };
+const documentChoices: Array<{
+  kind: VelaDocumentKind;
+  title: string;
+  detail: string;
+  accept: string;
+  icon: typeof CreditCard;
+}> = [
+  { kind: "Insurance card", title: "Insurance card", detail: "Read payer and member details", accept: "image/*", icon: CreditCard },
+  { kind: "Summary of Benefits", title: "Summary of Benefits", detail: "Read deductible and coverage rules", accept: ".pdf,application/pdf", icon: FileCheck2 },
+  { kind: "Referral/order", title: "Referral or order", detail: "Confirm exactly what was ordered", accept: ".pdf,.txt,application/pdf,text/plain", icon: FileText },
+  { kind: "Bill", title: "Medical bill", detail: "Prepare a published-rate check", accept: "image/*,.pdf,application/pdf", icon: ReceiptText },
+];
+
+function DocumentIcon({ kind }: { kind: VelaDocumentKind }) {
+  if (kind === "Insurance card") return <ScanLine />;
+  if (kind === "Bill") return <ReceiptText />;
+  if (kind === "Summary of Benefits") return <FileCheck2 />;
+  return <FileText />;
+}
+
+function ReportIntakePanel({ review, busy, onAnalyze, onToggleOrder, onConfirm, onClose }: {
+  review: ReferralIntakeReview;
+  busy: boolean;
+  onAnalyze: () => void;
+  onToggleOrder: (orderId: string) => void;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const orders = review.analysis?.orders ?? [];
+  const canConfirm = review.selectedOrderIds.length > 0 && review.phase === "review";
   return (
-    <div className="vela-camera-modal">
+    <section className="vela-report-review" aria-labelledby="report-review-title">
       <header>
-        <button onClick={onClose}>
-          <X />
-        </button>
-        <LogoMark />
-        <span>Care order</span>
+        <div>
+          <span>Referral intake</span>
+          <h2 id="report-review-title">Review before it enters your journey</h2>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close referral review"><X /></button>
       </header>
-      <div className="vela-camera-frame">
-        {error ? (
-          <div className="vela-camera-error">
-            <Camera />
-            <p>{error}</p>
-          </div>
-        ) : (
-          <video ref={videoRef} playsInline muted />
-        )}
-        <i />
-        <i />
-        <i />
-        <i />
-        <div className="vela-scan-line" />
+
+      <div className="vela-report-source">
+        <FileText aria-hidden />
+        <div>
+          <b>{review.fileName}</b>
+          <small>{(review.prepared.byte_count / 1024).toFixed(1)} KB · raw file not retained</small>
+        </div>
+        <span>Prepared</span>
       </div>
-      <p>Place the referral or clinician order inside the frame. Choosing capture explicitly approves analysis of this synthetic document for the active care journey.</p>
-      <button className="vela-shutter" onClick={capture} disabled={Boolean(error)}>
-        <span />
-      </button>
-    </div>
+
+      {review.phase === "consent" && (
+        <div className="vela-report-consent">
+          <ShieldCheck aria-hidden />
+          <div>
+            <span>Exact processing permission</span>
+            <p>{review.prepared.consent_scope}</p>
+            <code>{review.prepared.source_hash}</code>
+            <small>Analyze sends this exact file to the authenticated Hermes gateway for order extraction. Uploading alone did not analyze it.</small>
+          </div>
+          <button type="button" disabled={busy} onClick={onAnalyze}>Analyze this exact file</button>
+        </div>
+      )}
+
+      {review.phase === "analyzing" && (
+        <div className="vela-report-working" role="status" aria-live="polite">
+          <i /><div><b>Reading only explicit clinician orders</b><span>Checking every candidate against its source quote…</span></div>
+        </div>
+      )}
+
+      {review.analysis && review.phase !== "analyzing" && review.phase !== "confirmed" && (
+        <div className="vela-report-candidates">
+          <div className="vela-report-candidates-heading">
+            <div><span>Source-backed candidates</span><h3>{orders.length ? `Select what applies (${orders.length})` : "No explicit order found"}</h3></div>
+            <small>{review.analysis.consent.approved ? "Processing approved" : "Not approved"}</small>
+          </div>
+          {orders.length ? (
+            <fieldset>
+              <legend className="vela-visually-hidden">Select orders to add to the care journey</legend>
+              {orders.map((order) => {
+                const selected = review.selectedOrderIds.includes(order.order_id);
+                return (
+                  <label className={selected ? "is-selected" : ""} key={order.order_id}>
+                    <input type="checkbox" checked={selected} onChange={() => onToggleOrder(order.order_id)} />
+                    <span className="vela-report-check"><Check /></span>
+                    <span className="vela-report-order-copy">
+                      <b>{order.service_name}{order.service_code ? <em>{order.service_code}</em> : null}</b>
+                      <q>{order.source_quote}</q>
+                      <small>{order.source_location} · {Math.round(order.confidence * 100)}% extraction confidence · {order.verification_status.replace(/_/g, " ")}</small>
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+          ) : (
+            <div className="vela-report-empty">
+              <FileText />
+              <p>VELA could not find a test, procedure, imaging order, or referral explicitly written in this document. Nothing was added to a journey.</p>
+            </div>
+          )}
+          {orders.length > 0 && (
+            <footer>
+              <p>Only selected orders become verified journey facts. You can leave uncertain candidates unchecked.</p>
+              <button type="button" disabled={busy || !canConfirm} onClick={onConfirm}>
+                {review.phase === "confirming" ? "Confirming…" : `Confirm ${review.selectedOrderIds.length || "selected"} order${review.selectedOrderIds.length === 1 ? "" : "s"}`}
+              </button>
+            </footer>
+          )}
+        </div>
+      )}
+
+      {review.phase === "confirmed" && (
+        <div className="vela-report-complete" role="status">
+          <Check />
+          <div><b>Confirmed and added to your journey</b><span>The selected order is now a source-backed fact. VELA can use it to find current-plan hospital options.</span></div>
+        </div>
+      )}
+
+      {review.error && <div className="vela-report-error" role="alert">{review.error}</div>}
+    </section>
   );
 }
 
-function LogoMark() {
-  return <span className="vela-camera-logo">VELA</span>;
-}
-
-export function DocumentsTab({ documents, onDocuments, liveMode, openCamera, onOpenCamera, onProcessFile }: { documents: VelaDocument[]; onDocuments: (items: VelaDocument[]) => void; liveMode: boolean; openCamera: boolean; onOpenCamera: (open: boolean) => void; onProcessFile?: (file: File) => Promise<void> }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const addFile = async (file: File, preview?: string) => {
-    if (liveMode && onProcessFile) {
-      await onProcessFile(file);
-      return;
-    }
-    const kind: VelaDocument["kind"] = "Referral";
-    const item: VelaDocument = {
-      id: crypto.randomUUID(),
-      name: file.name,
-      kind,
-      status: "Processing",
-      added: "Just now",
-      preview,
-    };
-    onDocuments([item, ...documents]);
-    try {
-      if (liveMode && onProcessFile) await onProcessFile(file);
-      window.setTimeout(() => onDocuments([{ ...item, status: "Verified" }, ...documents]), 900);
-    } catch {
-      onDocuments([{ ...item, status: "Review needed" }, ...documents]);
-    }
-  };
+export function DocumentsTab({ documents, onDocuments, busy, referralReview, onUploadDocument, onAnalyzeReferral, onToggleReferralOrder, onConfirmReferral, onCloseReferral }: {
+  documents: VelaDocument[];
+  onDocuments: (items: VelaDocument[]) => void;
+  busy: boolean;
+  referralReview: ReferralIntakeReview | null;
+  onUploadDocument: (kind: VelaDocumentKind, file: File) => Promise<void>;
+  onAnalyzeReferral: () => void;
+  onToggleReferralOrder: (orderId: string) => void;
+  onConfirmReferral: () => void;
+  onCloseReferral: () => void;
+}) {
+  const inputRefs = useRef<Partial<Record<VelaDocumentKind, HTMLInputElement | null>>>({});
   return (
     <section className="vela-tab-page vela-documents-page">
       <header>
         <p>Your evidence locker</p>
         <h1>Documents</h1>
-        <span>Care orders remain connected to their source, confidence, and review status. Insurance comparison is a separate feature.</span>
-        <div>
-          <button onClick={() => onOpenCamera(true)}>
-            <Camera />
-            Scan &amp; analyze order
-          </button>
-          <button onClick={() => inputRef.current?.click()}>
-            <Upload />
-            Upload &amp; analyze order
-          </button>
-          <input ref={inputRef} hidden type="file" accept="image/*,.pdf" multiple onChange={(e) => Array.from(e.target.files || []).forEach((file) => void addFile(file))} />
-        </div>
+        <span>Choose the document you have. VELA applies a different, bounded workflow to each source.</span>
       </header>
+
+      <div className="vela-document-choices" aria-label="Choose a document type">
+        {documentChoices.map((choice) => {
+          const Icon = choice.icon;
+          return (
+            <div key={choice.kind}>
+              <button type="button" disabled={busy} onClick={() => inputRefs.current[choice.kind]?.click()}>
+                <Icon aria-hidden />
+                <span><b>{choice.title}</b><small>{choice.detail}</small></span>
+                <Upload aria-hidden />
+              </button>
+              <input
+                ref={(element) => { inputRefs.current[choice.kind] = element; }}
+                hidden
+                type="file"
+                accept={choice.accept}
+                aria-label={`Upload ${choice.title}`}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file) void onUploadDocument(choice.kind, file);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      {referralReview && (
+        <ReportIntakePanel review={referralReview} busy={busy} onAnalyze={onAnalyzeReferral} onToggleOrder={onToggleReferralOrder} onConfirm={onConfirmReferral} onClose={onCloseReferral} />
+      )}
+
       <div className="vela-document-layout">
         <aside>
           <ShieldCheck />
-          <h2>Private by design</h2>
-          <p>Capturing or uploading explicitly approves analysis of that care order for this journey. VELA records provenance and verification status for every extracted fact.</p>
-          <span>
-            <Check />
-            Encrypted transport
-          </span>
-          <span>
-            <Check />
-            Consent before processing
-          </span>
-          <span>
-            <Check />
-            Source retained in audit history
-          </span>
+          <h2>Permission is a step</h2>
+          <p>Uploading identifies the source. Referral analysis starts only after you approve the exact hash-bound scope, and extracted orders remain candidates until you confirm them.</p>
+          <span><Check /> Raw referral files are not retained</span>
+          <span><Check /> Quotes and page locations stay visible</span>
+          <span><Check /> Confirmed facts keep their provenance</span>
         </aside>
         <div className="vela-document-list">
-          {documents.map((document) => (
+          {documents.length ? documents.map((document) => (
             <article key={document.id}>
-              {document.preview ? <img src={document.preview} alt="Captured care order" /> : <div className="vela-file-icon">{document.kind === "Insurance card" ? <ScanLine /> : <FileText />}</div>}
+              {document.preview ? <img src={document.preview} alt="Uploaded document preview" /> : <div className="vela-file-icon"><DocumentIcon kind={document.kind} /></div>}
               <div>
                 <span>{document.kind}</span>
                 <h2>{document.name}</h2>
@@ -563,18 +618,11 @@ export function DocumentsTab({ documents, onDocuments, liveMode, openCamera, onO
                 <Trash2 />
               </button>
             </article>
-          ))}
+          )) : (
+            <div className="vela-document-empty"><FileText /><h2>No documents yet</h2><p>Add only the source needed for this care journey.</p></div>
+          )}
         </div>
       </div>
-      {openCamera && (
-        <CameraModal
-          onClose={() => onOpenCamera(false)}
-          onCapture={(file, preview) => {
-            onOpenCamera(false);
-            void addFile(file, preview);
-          }}
-        />
-      )}
     </section>
   );
 }

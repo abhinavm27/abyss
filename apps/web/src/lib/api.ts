@@ -171,6 +171,60 @@ export interface CardScan {
   provides_cost_sharing: false;
 }
 
+export interface PreparedReportDocument {
+  source_name: string;
+  media_type: "application/pdf" | "text/plain";
+  byte_count: number;
+  source_hash: string;
+  consent_action: "process_documents";
+  consent_scope: string;
+  raw_document_persisted: false;
+}
+
+export interface ReportCandidateOrder {
+  order_id: string;
+  service_name: string;
+  service_code: string | null;
+  source_quote: string;
+  source_location: string;
+  source: string;
+  observed_at: string;
+  confidence: number;
+  verification_status: string;
+  confirmed: boolean;
+}
+
+export interface ReportAnalysis {
+  analysis_id: string;
+  source_name: string;
+  source_hash: string;
+  observed_at: string;
+  journey_id: string | null;
+  orders: ReportCandidateOrder[];
+  confirmed_orders: Array<{
+    order_id: string;
+    journey_id: string | null;
+    source_quote: string;
+    source_location: string;
+    confirmed_at: string;
+  }>;
+  requires_confirmation: boolean;
+  consent: {
+    action: "process_documents";
+    approved: boolean;
+    actor: string;
+    scope: string;
+    recorded_at: string;
+  };
+  raw_document_persisted: false;
+}
+
+export interface ConfirmedReportIntake {
+  analysis: ReportAnalysis;
+  options_ready: boolean;
+  journey: CareJourneySnapshot;
+}
+
 /** Which figure off a bill the member is holding.
  *
  * Not cosmetic: a gross charge runs several times the negotiated rate, so the
@@ -754,6 +808,53 @@ export const api = {
     if (!r.ok) throw new Error(await readDetail(r));
     return r.json() as Promise<CardScan>;
   },
+
+  prepareReportIntake: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const r = await fetch(`${BASE}/api/report-intake/prepare`, {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!r.ok) throw new Error(await readDetail(r));
+    return r.json() as Promise<PreparedReportDocument>;
+  },
+
+  analyzeReportIntake: async (
+    file: File,
+    consentScope: string,
+    journeyId?: string,
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("consent_scope", consentScope);
+    form.append("consent_approved", "true");
+    if (journeyId) form.append("journey_id", journeyId);
+    const r = await fetch(`${BASE}/api/report-intake/analyze`, {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!r.ok) throw new Error(await readDetail(r));
+    return r.json() as Promise<ReportAnalysis>;
+  },
+
+  confirmReportOrders: (
+    analysisId: string,
+    orderIds: string[],
+    journeyId?: string | null,
+  ) =>
+    req<ConfirmedReportIntake>(
+      `/api/report-intake/${encodeURIComponent(analysisId)}/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          order_ids: orderIds,
+          journey_id: journeyId || null,
+        }),
+      },
+    ),
 
   analyzeCareOrder: async (
     file: File,
