@@ -30,6 +30,20 @@ VELA targets the **Nemotron Lightning** and **NemoClaw and OpenShell** bounties.
 - Sandbox enrollment, coverage transition, appointment booking, and rescheduling
 - Idempotent receipts, bounded recovery, and an auditable journey history
 
+### Performance highlights
+
+VELA's largest measured optimization reduced an indexed catalog lookup from
+**96 seconds to 0.6 seconds** on the development catalog, approximately **160x
+faster**. Voice tuning reduced the same Magpie synthesis sample from about
+**6.2 seconds to 4.0 seconds**, while browser end-of-speech detection removes
+another **256 milliseconds** before a turn is submitted. For common explicit
+care requests, deterministic routing and fact extraction can also avoid the
+Hermes planning and extraction round trips entirely.
+
+These are targeted development measurements and path-level improvements, not a
+claim about production p95 latency. See [Performance evolution](docs/ARCHITECTURE.md#performance-evolution)
+for the implementation evidence, model-context tradeoffs, and measurement boundary.
+
 ## Three complete product journeys
 
 ### 1. Voice-first care navigation
