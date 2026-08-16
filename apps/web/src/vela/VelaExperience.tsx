@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken, type CareAgentResponse, type CareContext, type CareJourneySnapshot } from "@/lib/api";
-import { useVoiceSession } from "@/hooks/useVoiceSession";
+import { VOICE_LABEL, useVoiceSession } from "@/hooks/useVoiceSession";
 import { captureCard } from "@/lib/cardScan";
 import { NeuralPath } from "@/vela/NeuralPath";
 import { AppointmentsTab, DocumentsTab, PathsTab, PreferencesTab, type VelaAppointment, type VelaDocument } from "@/vela/VelaTabs";
@@ -355,6 +355,18 @@ export function VelaExperience() {
   } : copy;
   const resolved = ["recommendation", "consent", "booking", "complete"].includes(scene);
   const voiceLevel = inputMode === "chat" && chatBusy ? .72 : liveMode ? voice.micLevel : demoMic.level;
+  const voiceFeedback = liveMode
+    ? (voice.status === "listening" && voiceLevel > .08 ? "I can hear you…" : VOICE_LABEL[voice.status])
+    : (voiceLevel > .08 ? "I can hear you…" : liveCopy.status);
+  const voiceButtonLabel = liveMode
+    ? voice.isListening
+      ? "Listening now"
+      : voice.isProcessing
+        ? VOICE_LABEL[voice.status]
+        : voice.isActive
+          ? VOICE_LABEL[voice.status]
+          : "Start a care request"
+    : demoMic.active ? "Listening now" : "Start a care request";
   const agentCount = useMemo(() => {
     if (scene === "working") return 2;
     if (["decision", "verifying"].includes(scene)) return 3;
@@ -607,10 +619,10 @@ export function VelaExperience() {
             <div className="vela-mode-switch"><button type="button" className={inputMode === "voice" ? "is-active" : ""} onClick={() => setInputMode("voice")}><Phone />Call</button><button type="button" className={inputMode === "chat" ? "is-active" : ""} onClick={() => setInputMode("chat")}><MessageCircle />Chat</button></div>
             <p className="vela-eyebrow">{inputMode === "chat" && chatStarted ? requestedCare : liveCopy.eyebrow}</p>
             <h1>{(inputMode === "chat" && chatStarted ? "Finding your clearest path." : liveCopy.title).split("\n").map((line, lineIndex, lines) => <span key={line}>{line}{lineIndex < lines.length - 1 && <br />}</span>)}</h1>
-            {inputMode === "voice" && <><div className="vela-listener" style={{ "--energy": voiceLevel } as React.CSSProperties}><Waveform /><VoiceOrb active={scene !== "complete"} /><Waveform /></div><p className="vela-status">{voiceLevel > .08 ? "I can hear you…" : liveCopy.status}</p></>}
+            {inputMode === "voice" && <><div className={`vela-listener is-${liveMode ? voice.status : demoMic.active ? "listening" : "idle"}`} style={{ "--energy": voiceLevel } as React.CSSProperties}><Waveform /><VoiceOrb active={liveMode ? voice.isListening || voice.status === "speaking" : scene !== "complete"} /><Waveform /></div><p className={`vela-status is-${liveMode ? voice.status : "idle"}`}><i aria-hidden />{voiceFeedback}</p></>}
             {inputMode === "chat" && <ChatPanel turns={chatTurns} value={chatValue} busy={chatBusy} onValue={setChatValue} onSend={sendChat} />}
 
-            {scene === "listening" && inputMode === "voice" && <div className="vela-start"><p>Tell VELA what care you need, or begin with the guided demo.</p><button onClick={() => void begin()}>{(liveMode ? voice.isActive : demoMic.active) ? <><Mic />Listening now</> : <><Mic />Start a care request</>}</button></div>}
+            {scene === "listening" && inputMode === "voice" && <div className="vela-start"><p>{liveMode && voice.isProcessing ? "Your turn is complete. The microphone is paused while VELA works." : "Tell VELA what care you need. A natural pause will end your turn automatically."}</p><button disabled={liveMode && voice.isActive} onClick={() => void begin()}><Mic />{voiceButtonLabel}</button></div>}
             {["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
             {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
             {scene === "recommendation" && journey && <RecommendationCard journey={journey} onContinue={() => setTab("paths")} onExplain={() => void explainPaths()} />}
