@@ -21,7 +21,14 @@ catalog is mounted as evidence, not used as the application-state database.
 
 ## Parallel workstreams
 
+All five workstreams are integrated on `codex/integrate-abyss-capabilities`.
+The repository includes root-systemd service assets; installing those units on
+GN100 remains an operator step because it requires that machine's sudo password.
+The current test deployment runs the same API and web commands under `acer01`.
+
 ### K — Catalog adapter
+
+Status: complete and live on GN100.
 
 - Configure the real Seattle catalog explicitly.
 - Validate path/schema/freshness at startup and health check.
@@ -29,6 +36,8 @@ catalog is mounted as evidence, not used as the application-state database.
 - Preserve seeded catalog behavior only when no external catalog is configured.
 
 ### R — Report and referral intake
+
+Status: complete, including PDF/text upload and camera image + browser OCR.
 
 - Record exact document-processing consent.
 - Extract text from supported PDFs/text files without persisting the raw upload.
@@ -38,6 +47,8 @@ catalog is mounted as evidence, not used as the application-state database.
 
 ### M — Messaging adapters
 
+Status: complete; sandbox remains the default.
+
 - Unify preview and send behind one adapter interface.
 - Keep ordinary SMS/Discord messages secure-link-only.
 - Require exact channel, destination, and message-kind consent.
@@ -45,12 +56,16 @@ catalog is mounted as evidence, not used as the application-state database.
 
 ### O — GN100 operations
 
+Status: deployment assets complete; privileged unit installation pending operator sudo.
+
 - Supervise API and frontend processes instead of PID files and ad-hoc `nohup`.
 - Keep environment configuration outside Git.
 - Separate the state and knowledge database paths.
 - Add health/start/stop/status checks and automatic restart.
 
 ### U — VELA and admin interface
+
+Status: complete and deployed.
 
 - Present Insurance card, Summary of Benefits, Referral/order, and Bill as distinct inputs.
 - Review and confirm extracted orders before starting or updating a journey.

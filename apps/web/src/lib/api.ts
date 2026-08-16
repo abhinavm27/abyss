@@ -682,7 +682,13 @@ async function authRequest(path: string, email: string, password: string): Promi
 }
 
 export const api = {
-  health: () => req<{ ok: boolean; rates: number; hospitals: number }>("/api/health"),
+  health: () => req<{
+    ok: boolean;
+    rates: number;
+    hospitals: number;
+    state_database?: string;
+    knowledge_catalog?: { status: string; source: string; access: string; network_status_authority: boolean };
+  }>("/api/health"),
 
   signup: (email: string, password: string) => authRequest("/api/auth/signup", email, password),
   login: (email: string, password: string) => authRequest("/api/auth/login", email, password),

@@ -1405,7 +1405,18 @@ def health(conn: sqlite3.Connection = Depends(get_conn)):
     makes, so it timed out the dev proxy and the app never started.
     """
     hospitals = conn.execute("SELECT COUNT(*) c FROM hospital").fetchone()["c"]
-    return {"ok": True, "rates": db.approximate_rate_count(conn), "hospitals": hospitals}
+    return {
+        "ok": True,
+        "rates": db.approximate_rate_count(conn),
+        "hospitals": hospitals,
+        "state_database": "ready",
+        "knowledge_catalog": {
+            "status": "ready",
+            "source": _hospital_knowledge.source_name,
+            "access": "read_only",
+            "network_status_authority": False,
+        },
+    }
 
 
 @app.get("/api/hospitals")
