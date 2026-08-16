@@ -11,7 +11,7 @@ One submission is permitted per team. This tracker records repository readiness;
 | Team name | Ready | VELA | Enter `VELA` in the form |
 | Project description | Ready | README opening paragraph | Copy the approved description exactly |
 | Challenge selected | Ready | Do Track rationale in README | Select `Do` in the form |
-| Demo video | Pending | Runbook, core loop, and deployed interface are ready | Record a 3 to 5 minute walkthrough, upload unlisted, and verify the link signed out |
+| Demo video | Ready — final link pending | Final recording is in production; runbook, core loop, and deployed interface are ready | Add the verified signed-out URL when the final upload completes |
 | Repository link | Ready | `https://github.com/abhinavm27/abyss` on merged `main` | Enter the repository URL in the form |
 | Deployed URL or working screen capture | Ready | `https://gn100-75f8.tailf05681.ts.net` (confirmed live via `/api/health` on August 16, 2026) | Verify the final deployed build immediately before submission |
 | Team roster | Ready | All three names, roles, and contact details are in README | Copy the roster into the submission form |
@@ -22,33 +22,47 @@ One submission is permitted per team. This tracker records repository readiness;
 | --- | --- | --- | --- |
 | Quick start commands | Ready | `README.md` | Reproduced from a clean checkout on August 15, 2026 |
 | Tech stack and architecture diagram | Ready | `README.md`, `docs/ARCHITECTURE.md` | Add final UI or deployment components if they change |
-| Demo reproduction, environment variables, API keys, sample environment | Ready with private infrastructure caveat | `README.md`, `.env.example`, `docs/DEMO_RUNBOOK.md`, `docs/HERMES_CONNECTION.md` | Verify judge safe mode without private credentials |
+| Demo reproduction, environment variables, API keys, sample environment | Ready | `README.md`, `.env.example`, `docs/DEMO_RUNBOOK.md`, `docs/HERMES_CONNECTION.md` | Judge-safe deterministic reproduction requires no private model credentials |
 | Datasets and synthetic data provenance | Ready | `docs/DATA_PROVENANCE.md` | Add any new external source before submission |
 | Known limitations and next steps | Ready | `README.md` | Reconcile after final integration |
 
 ## Do Track evidence
 
-| Judging signal | Existing evidence | Remaining work |
-| --- | --- | --- |
-| Full workflow completeness | Tested vertical slice from intake through sandbox booking | Demonstrate the same path in the final UI without a crash |
-| Branching and error recovery | Tests cover ambiguity, out of network rejection, missing consent, transition prerequisites, and idempotency | Surface the most compelling branch visibly in the demo |
-| Technical depth | Fact ledger, deterministic engine, bounded agents, consent state machine, adapters, and audit ledger | Show the architecture and one live audit trace in the video |
-| NVIDIA ecosystem | Local Nemotron through NemoClaw and Hermes on DGX Spark | Capture proof of local inference and explain why local execution matters |
-| Human value | Spoken request to cost aware care path and appointment outcome | Keep the demo centered on one understandable patient story |
-| Usability | Complete VELA web and iPhone compositions, voice and chat journeys, neural care paths, camera/PDF intake, and functional workspace tabs | Rehearse the judged journey on the final deployment |
-| Performance | Local inference and deterministic calculation | Record real latency and, if available, memory or utilization evidence |
+| Judging signal | Status | Existing evidence | Demo emphasis |
+| --- | --- | --- | --- |
+| Full workflow completeness | Ready | Tested vertical slice and team-confirmed demo reproduction from intake through sandbox booking | Show the same path in the final video |
+| Branching and error recovery | Ready | Tests cover ambiguity, out-of-network rejection, missing consent, transition prerequisites, and idempotency | Surface the most compelling branch visibly |
+| Technical depth | Ready | Fact ledger, deterministic engine, bounded agents, consent state machine, adapters, and audit ledger | Show the architecture and one live audit trace |
+| NVIDIA ecosystem | Ready | Local Nemotron through NemoClaw and Hermes on NVIDIA GB10 | Capture local-inference proof and explain why local execution matters |
+| Human value | Ready | Spoken request to cost-aware care path and sandbox appointment outcome | Keep the video centered on one understandable patient story |
+| Usability | Ready | Complete VELA web and iPhone compositions, voice and chat journeys, neural care paths, camera/PDF intake, and functional workspace tabs | Use the final deployed composition |
+| Performance | Ready | Local inference and deterministic calculation | Include measured latency or utilization when available |
 
 ## Engineering verification
 
-| Check | Current result | Final command |
-| --- | --- | --- |
-| Python deterministic and vertical slice tests | Passing, 119 tests (109 `unittest` + 10 `pytest`) on August 16, 2026 | `PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s tests -v` |
-| Web typecheck | Passing on merged `main` | `cd apps/web && npm run typecheck` |
-| Web production build | Passing on merged `main` | `cd apps/web && npm run build` |
-| Secret and real data scan | Passing on August 15, 2026 | Review tracked files and repository history again after any last minute change |
-| Clean install reproduction | Passing on August 15, 2026 | Re-run only if dependencies or setup instructions change |
-| Live Hermes integration | Passing on August 16, 2026 — `python3 -m abyss.cli` returned exactly `ABYSS HERMES READY` via the authenticated gateway at `HERMES_BASE_URL` (127.0.0.1:8642); confirmed no code path calls vLLM's port 8000 directly | Use private tunnel and authenticated gateway only |
-| Full UI journey | Implemented | Run the golden path three times on the final deployment before recording |
+| Check | Status | Current result | Final command or evidence |
+| --- | --- | --- | --- |
+| Domain and vertical-slice tests | Ready | Passing, 109 tests on August 16, 2026 at `6c86757` | `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v` |
+| API service tests | Ready | Passing, 17 tests on August 16, 2026 at `6c86757` | `PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s services/api/tests -v` |
+| Web application tests | Ready | Passing, 9 tests on August 16, 2026 at `6c86757` | `npm --prefix apps/web test -- --run` |
+| Web typecheck | Ready | Passing on August 16, 2026 at `6c86757` | `npm --prefix apps/web run typecheck` |
+| Web production build | Ready | Passing on August 16, 2026 at `6c86757` | `npm --prefix apps/web run build` |
+| Expanded GitHub Actions | Ready | Passing on August 16, 2026 at `e66f6db` | Root, API, web test, typecheck, build, and dependency-audit steps passed |
+| Secret and real data review | Ready | Focused tracked-file and changed-path scan passing on August 16, 2026 at `6c86757`; no private-key or common token patterns, runtime databases, raw uploads, or `.env` files found | Run the repository-history scanner again if one becomes available before merge |
+| Clean install reproduction | Ready | Passing on August 15, 2026 | Re-run only if dependencies or setup instructions change |
+| Live Hermes integration | Ready | Passing on August 16, 2026 — `python3 -m abyss.cli` returned exactly `ABYSS HERMES READY` via the authenticated gateway at `HERMES_BASE_URL` (127.0.0.1:8642); confirmed no code path calls vLLM's port 8000 directly | Use private tunnel and authenticated gateway only |
+| Public interface smoke check | Ready | The deployed site accepted the synthetic MRI request, displayed three deterministic paths, and showed the seeded appointment | `View receipt` opens a modal labeled `Sandbox audit receipt` in `apps/web/src/vela/VelaTabs.tsx` |
+| Demo reproduction | Ready | Team-confirmed on August 16, 2026 | `docs/DEMO_RUNBOOK.md` contains the seeded inputs, exact consent scopes, expected outcomes, and recovery cases |
+
+## Repository polish verification
+
+- Branch: `codex/repo_struct`
+- Pull request: `#9` into `main`
+- Validated source revision: `6c86757`
+- Runtime impact: none; the branch changes repository documentation and CI coverage only
+- GitHub About description, website, and recommended topics: updated August 16, 2026
+- Public deployment: reachable at `https://vela-care-path.fsaguilar16.chatgpt.site/`
+- Final publication step: add the verified signed-out demo-video link after upload
 
 ## Final submission sequence
 

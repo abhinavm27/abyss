@@ -18,8 +18,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Python dependencies
+        run: python3 -m pip install -e . -e services/api
+
       - name: Test deterministic engine and API workflow
         run: PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+      - name: Test API service
+        run: PYTHONPATH=src:services/api python3 -m unittest discover -s services/api/tests -v
 
       - uses: actions/setup-node@v4
         with:
@@ -30,6 +36,10 @@ jobs:
       - name: Install web dependencies
         working-directory: apps/web
         run: npm ci
+
+      - name: Test web application
+        working-directory: apps/web
+        run: npm test -- --run
 
       - name: Typecheck web application
         working-directory: apps/web

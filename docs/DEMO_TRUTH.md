@@ -1,19 +1,22 @@
 # VELA demo truth and fallback rules
 
-## Working
+## Working with controlled inputs
 
-- Seeded insurance-card and referral extraction
+- Seeded insurance-card and referral processing
 - Personal Care Twin state
 - Three-plan cost comparison
 - Special Enrollment eligibility gate
 - Consent ledger
-- Provider verification through a controlled endpoint or call
 
-## Sandboxed
+## Controlled or sandboxed external actions
 
+- Provider verification through a controlled endpoint, supervised call, or clearly labeled recording
 - Plan enrollment submission
 - Existing-coverage transition
 - Appointment booking
+
+A sandbox receipt proves that the VELA workflow and adapter executed. It does
+not prove that an insurer or provider changed a real external record.
 
 ## Never imply
 

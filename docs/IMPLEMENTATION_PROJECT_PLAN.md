@@ -1,10 +1,10 @@
-# ABYSS Implementation Project Plan
+# VELA Implementation Project Plan
 
 ## Goal
 
 Implement one truthful, end-to-end seeded demo: a Washington user who recently lost employer coverage requests a non-emergency MRI, compares three plans, selects the lowest expected annual-cost path subject to provider and medication constraints, approves sandbox enrollment and coverage transition, verifies a provider, and books a sandbox appointment.
 
-ABYSS is not medical advice, a licensed broker, production enrollment, or production booking.
+VELA is not medical advice, a licensed broker, production enrollment, or production booking.
 
 ## Architecture decision
 
@@ -271,7 +271,7 @@ Every unimplemented external seam should have a truthful sandbox adapter so the 
 
 ## Definition of done
 
-A judge can watch ABYSS transform the seeded request into a personalized coverage decision and verified sandbox appointment, with:
+A judge can watch VELA transform the seeded request into a personalized coverage decision and verified sandbox appointment, with:
 
 - visible source-backed facts;
 - explicit missing and unverified information;

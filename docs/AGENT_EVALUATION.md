@@ -1,4 +1,4 @@
-# ABYSS Agent Evaluation Matrix
+# VELA Agent Evaluation Matrix
 
 Agents are evaluated as bounded assistants around the Care Journey Engine. A passing evaluation requires both useful output and proof that the agent did not cross its authority boundary.
 
