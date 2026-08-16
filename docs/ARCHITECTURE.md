@@ -184,6 +184,60 @@ The application never calls the vLLM server directly. Tailscale and SSH protect 
 
 DGX Spark is useful here because VELA can keep the model, retrieval context, document processing, and long running workflow state on a local system. That reduces the need to transmit sensitive care and insurance context to a hosted model and provides predictable conversational latency. Deterministic comparison continues to function if Nemotron is unavailable, while language dependent steps fail closed or request operator review.
 
+## Performance evolution
+
+VELA was optimized around the latency a user actually experiences: finding
+catalog evidence, recognizing the end of a spoken turn, routing a request,
+producing grounded language, and beginning audio playback. The most important
+improvements on the `main` lineage are:
+
+| Area | Optimization | Observed or structural result |
+| --- | --- | --- |
+| Hospital catalog | Removed a low-selectivity `estimable` index that caused SQLite to choose it instead of the `(code, code_type)` index | A documented development lookup fell from 96 seconds to 0.6 seconds, approximately 160x faster |
+| Catalog search and health | Uses exact-code lookup first, bounds the FTS/BM25 candidate set to 4,000 rows, and reads the analyzed rate count from `sqlite_stat1` instead of scanning the full table | Keeps fallback search and health checks bounded over the multi-million-row catalog |
+| Care routing | Exact pending replies and unmistakable new-care requests use narrow deterministic classifiers before invoking Hermes | A sufficiently explicit request can avoid both the supervisor and fact-extraction model round trips |
+| Hermes decoding | Routing, extraction, explanation, booking, and phrasing calls have purpose-specific output limits from 150 to 500 tokens and normally use temperature zero | Bounds generation work and makes schema validation more predictable |
+| Voice endpointing | Browser silence hangover changed from ten to eight 128 millisecond chunks | Submits a completed spoken turn approximately 256 milliseconds sooner |
+| Speech synthesis | The deployed Magpie voice changed from `Mia.Calm` to `Mia.Neutral` | The same development sentence was documented at about 4.0 seconds instead of 6.2 seconds, roughly 35 percent lower synthesis time |
+| Perceived responsiveness | Care-agent work begins concurrently with a short, non-committal spoken acknowledgement, and Magpie audio is streamed in chunks | Overlaps reasoning with acknowledgement playback and reduces the silent wait before the user hears a response |
+| Mobile intake | Card captures are resized to 1,600 pixels at 80 percent quality and OCR runs in the browser | Reduces upload size and avoids a hosted vision-model round trip |
+
+### Hermes context and call budget
+
+Hermes receives a compact, redacted care snapshot rather than the complete
+database record. It contains selected intake facts, minimal active-plan data,
+journey and appointment summaries, and current scheduled tasks. Agent-event
+history, credentials, raw documents, and full catalog rows are excluded. JSON
+is serialized without optional whitespace, model outputs are validated against
+closed schemas, and an invalid schema receives at most one corrective retry.
+
+The deterministic fast paths are intentionally narrow. They activate only when
+the transport or literal wording provides enough source-backed evidence; an
+ambiguous request still uses Nemotron. A fully specified common care request can
+therefore use zero Hermes calls, while an incomplete explicit request may use
+one call to phrase the remaining deterministic question. More ambiguous intake
+can require separate routing, extraction, and phrasing calls.
+
+Context quality grew with product capability. The supervisor prompt expanded
+from 580 characters in the first multi-journey implementation to 1,896
+characters after plan comparison and discovery were added. That improves
+routing coverage but increases prompt processing. The current care snapshot
+also includes every journey and appointment for the member, so a production
+version should cap or summarize older records.
+
+### Measurement boundary
+
+The 96-to-0.6-second catalog result and 6.2-to-4.0-second speech result are
+development observations recorded alongside their optimizations. The 256
+millisecond endpointing improvement follows directly from the browser's 16 kHz
+audio chunks. They are not a standardized end-to-end benchmark and should not
+be presented as production p50 or p95 latency.
+
+Durable care-agent traces currently record outcome, correlation, and recovery
+information, but not useful stage durations. A complete performance harness
+should separately record ASR completion, Hermes queue and generation time,
+catalog query time, TTS first byte and completion, and total voice-turn latency.
+
 ## Model and deterministic responsibility split
 
 ### NVIDIA Nemotron may
