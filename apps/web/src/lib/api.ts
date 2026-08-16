@@ -750,6 +750,29 @@ export const api = {
     return r.json() as Promise<CardScan>;
   },
 
+  analyzeCareOrder: async (
+    file: File,
+    activeJourneyId?: string,
+    extractedText?: string,
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (activeJourneyId) form.append("journey_id", activeJourneyId);
+    if (extractedText) form.append("extracted_text", extractedText);
+    const r = await fetch(`${BASE}/api/care-orders/analyze`, {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!r.ok) throw new Error(await readDetail(r));
+    return r.json() as Promise<{
+      filename: string;
+      characters_extracted: number;
+      options_ready: boolean;
+      journey: CareJourneySnapshot;
+    }>;
+  },
+
   applySbc: (body: SbcApply) =>
     req<{ id: number; benefits_saved: number }>("/api/sbc/apply", {
       method: "POST",

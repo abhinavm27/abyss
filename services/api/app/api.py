@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from threading import Event, Thread
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from abyss.agent import explain
@@ -1318,6 +1318,88 @@ async def scan_card(
         raise HTTPException(status_code=413, detail="that image is too large")
     result = card.parse(data, file.content_type or "image/jpeg")
     return {"filename": file.filename, **result.as_dict()}
+
+
+@app.post("/api/care-orders/analyze")
+async def analyze_care_order(
+    file: UploadFile = File(...),
+    journey_id: str | None = Form(default=None),
+    extracted_text: str | None = Form(default=None),
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
+    """Extract a referral/order into the same consented journey fact ledger.
+
+    Text PDFs are read server-side. Camera images are OCR'd in the browser and
+    the original image is still submitted as provenance. Hermes receives text
+    only through the authenticated gateway; deterministic terminology remains
+    authoritative for procedure resolution and hospital matching.
+    """
+    payload = await file.read()
+    if len(payload) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="that care order is larger than 15 MB")
+
+    document_text = (extracted_text or "").strip()
+    if not document_text and (file.filename or "").lower().endswith(".pdf"):
+        try:
+            document_text = sbc.extract_text(io.BytesIO(payload)).strip()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"could not read text from that care order: {type(exc).__name__}",
+            ) from exc
+    if not document_text:
+        raise HTTPException(
+            status_code=422,
+            detail="no readable care-order text was found; retake the photo in good light",
+        )
+    if len(document_text) > 20_000:
+        document_text = document_text[:20_000]
+
+    journey = _owned_journey(journey_id, user_id)
+    if journey is None and journey_id:
+        journey = _restore_intake_journey(conn, journey_id, user_id)
+    if journey is None:
+        journey = _open_journey(user_id, seed_defaults=False)
+        now = datetime.now(timezone.utc)
+        for name, value in (("preferred_provider", "Dr. Lee"),
+                            ("preferred_facility", "Seattle General")):
+            journey.record_fact(DecisionFact(
+                name, value, "seeded_user_profile", now, 1.0,
+                VerificationStatus.SOURCE_BACKED,
+            ))
+    if journey.stage.value != "intake":
+        raise HTTPException(
+            status_code=409,
+            detail="start a new care journey before analyzing another care order",
+        )
+
+    filename = (file.filename or "care-order").replace("\n", " ")[:160]
+    scope = f"analyze care order {filename}"
+    journey.record_consent(
+        ConsentAction.PROCESS_DOCUMENTS,
+        approved=True,
+        scope=scope,
+        actor="synthetic-user",
+    )
+    journey.onboard(document_text, source=f"care_order:{filename}")
+    options_ready = _prepare_chat_care_options(journey)
+    journey.audit.append(
+        journey.journey_id,
+        "care_order_analyzed",
+        actor="onboarding_agent",
+        payload={
+            "filename": filename,
+            "characters_extracted": len(document_text),
+            "options_ready": options_ready,
+        },
+    )
+    return {
+        "filename": filename,
+        "characters_extracted": len(document_text),
+        "options_ready": options_ready,
+        "journey": _journey_payload(journey),
+    }
 
 
 class SbcBenefitIn(BaseModel):

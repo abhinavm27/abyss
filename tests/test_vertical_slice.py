@@ -275,6 +275,45 @@ class VerticalSliceTests(TestCase):
         self.assertIn("matching catalog entry", questions)
         self.assertNotIn("MRI knee", questions)
 
+    def test_blood_test_clarification_asks_for_test_name_not_body_area(self) -> None:
+        class FakeModel:
+            def chat(self, messages, **kwargs):
+                return '{"facts":[{"name":"requested_procedure","value":"blood test","confidence":0.95}]}'
+
+        journey = CareJourney.open(
+            "journey-blood-test",
+            onboarding_agent=OnboardingAgent(FakeModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("book a blood test", source="user_request")
+        questions = " ".join(journey.onboarding_questions)
+        self.assertIn("Which blood test", questions)
+        self.assertNotIn("body area", questions)
+
+    def test_unresolved_procedure_replacement_does_not_duplicate_across_turns(self) -> None:
+        class SequencedModel:
+            def __init__(self):
+                self.responses = iter([
+                    '{"facts":[{"name":"requested_procedure","value":"MRI scan","confidence":0.9}]}',
+                    '{"facts":[{"name":"requested_procedure","value":"complete abdominal MRI","confidence":0.9}]}',
+                    '{"facts":[{"name":"requested_procedure","value":"complete abdominal MRI","confidence":0.9}]}',
+                ])
+
+            def chat(self, messages, **kwargs):
+                return next(self.responses)
+
+        journey = CareJourney.open(
+            "journey-no-procedure-loop",
+            onboarding_agent=OnboardingAgent(SequencedModel()),
+            knowledge_agent=KnowledgeAgent(),
+        )
+        journey.onboard("MRI scan", source="user_request")
+        journey.onboard("complete abdominal MRI", source="user_request")
+        journey.onboard("complete abdominal MRI", source="user_request")
+        value = str(journey.workflow.care_state.facts["requested_procedure"].value)
+        self.assertEqual(value, "complete abdominal MRI")
+        self.assertNotIn(";", value)
+
     def test_complete_abdominal_ultrasound_resolves_from_explicit_reply(self) -> None:
         class FakeModel:
             def chat(self, messages, **kwargs):

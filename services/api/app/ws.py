@@ -384,10 +384,19 @@ async def voice_endpoint(
     db.init_db(conn)
 
     user_id: int | None = None
+    requested_journey_id: str | None = None
     try:
         first = json.loads(await ws.receive_text())
         if first.get("type") == "auth":
             user_id = auth.user_for_token(conn, first.get("token"))
+            if isinstance(first.get("active_journey_id"), str):
+                candidate = str(first["active_journey_id"]).strip()
+                owned = conn.execute(
+                    "SELECT 1 FROM care_journey WHERE journey_id=? AND user_id=?",
+                    (candidate, user_id),
+                ).fetchone()
+                if owned:
+                    requested_journey_id = candidate
     except (json.JSONDecodeError, KeyError):
         pass
     if user_id is None:
@@ -409,7 +418,8 @@ async def voice_endpoint(
 
     session_id = f"voice-{uuid.uuid4().hex[:12]}"
     correlation_id = f"correlation-{uuid.uuid4().hex[:12]}"
-    active_journey_id: str | None = None
+    # A browser reconnect is a transport event, not a new care journey.
+    active_journey_id: str | None = requested_journey_id
     utterance_id: str | None = None
     pcm = bytearray()
     max_pcm_bytes = speech.config.input_sample_rate * 2 * 45

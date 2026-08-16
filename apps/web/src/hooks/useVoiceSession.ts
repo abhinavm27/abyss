@@ -49,6 +49,7 @@ export interface TranscriptTurn {
 interface Options {
   onUiEvent?: (target: string, payload: unknown) => void;
   onError?: (message: string) => void;
+  activeJourneyId?: string | null;
 }
 
 /** Merge transcription fragments without duplicating an already-rendered turn. */
@@ -163,7 +164,7 @@ function toBase64(buf: ArrayBuffer): string {
   return btoa(s);
 }
 
-export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
+export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options = {}) {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([]);
   const [micLevel, setMicLevel] = useState(0);
@@ -371,7 +372,11 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
     // The session token goes in the first frame rather than the URL: a token in
     // a query string is written to server access logs and browser history, and
     // a WebSocket handshake cannot carry an Authorization header.
-    ws.send(JSON.stringify({ type: "auth", token: getToken() }));
+    ws.send(JSON.stringify({
+      type: "auth",
+      token: getToken(),
+      active_journey_id: activeJourneyId ?? undefined,
+    }));
 
     // If the microphone is unavailable the whole session is torn down. Leaving
     // the socket open would leave the UI saying "Listening" when nothing is
@@ -437,7 +442,7 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
       setStatus("error");
       throw err;
     }
-  }, [append, disconnect, onError, onUiEvent, play, stopPlayback]);
+  }, [activeJourneyId, append, disconnect, onError, onUiEvent, play, stopPlayback]);
 
   const sendText = useCallback((text: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

@@ -108,18 +108,11 @@ class CareJourney:
                 # Preserve explicit information across turns. The model proposes
                 # the merge; the source-backed catalog validates it before the
                 # fact ledger replaces the previous procedure value.
-                procedure_phrase = (
-                    f"{existing_procedure.value} {fact.value} {text.strip()}"
-                )
-                merged_resolution = self.knowledge_agent.propose_procedure(
-                    procedure_phrase
-                )
-                merged_value = (
-                    merged_resolution.canonical_name
-                    if not merged_resolution.needs_confirmation
-                    else f"{existing_procedure.value}; {fact.value}"
+                merged_value, merged_resolution = self.procedure_catalog.merge(
+                    str(existing_procedure.value), str(fact.value), text.strip()
                 )
                 fact = replace(fact, value=merged_value)
+                procedure_phrase = merged_value
             elif fact.name == "requested_procedure":
                 procedure_phrase = f"{fact.value} {text.strip()}"
             self.record_fact(fact)
@@ -151,20 +144,9 @@ class CareJourney:
         questions = [required[name] for name in missing]
         if self.procedure_resolution is not None and self.procedure_resolution.needs_confirmation:
             missing.append("procedure_code_confirmation")
-            if self.procedure_resolution.candidates:
-                candidate_names = self.procedure_catalog.names_for(
-                    self.procedure_resolution.candidates
-                )
-                choices = " or ".join(candidate_names)
-                questions.append(
-                    f"Should this be {choices}?" if choices
-                    else "Which specific procedure did your clinician order?"
-                )
-            else:
-                questions.append(
-                    "What body area and specific type of procedure did your clinician order? "
-                    "I need those details to find the matching catalog entry."
-                )
+            questions.append(self.procedure_catalog.clarification_question(
+                str(procedure or ""), self.procedure_resolution
+            ))
         self.onboarding_missing = tuple(missing)
         self.onboarding_questions = tuple(questions)
         self.audit.append(self.journey_id, "onboarding_completed", actor="onboarding_agent",
