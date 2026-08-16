@@ -11,7 +11,7 @@ One submission is permitted per team. This tracker records repository readiness;
 | Team name | Ready | VELA | Enter `VELA` in the form |
 | Project description | Ready | README opening paragraph | Copy the approved description exactly |
 | Challenge selected | Ready | Do Track rationale in README | Select `Do` in the form |
-| Demo video | Ready — final link pending | Final recording is in production; runbook, core loop, and deployed interface are ready | Add the verified signed-out URL when the final upload completes |
+| Demo video | Ready | [Public 3:32 VELA demo](https://www.youtube.com/watch?v=96vTfD5ZC2M), verified on August 16, 2026 | Enter the verified URL in the submission form |
 | Repository link | Ready | `https://github.com/abhinavm27/abyss` on merged `main` | Enter the repository URL in the form |
 | Deployed URL or working screen capture | Ready | `https://gn100-75f8.tailf05681.ts.net` (confirmed live via `/api/health` on August 16, 2026) | Verify the final deployed build immediately before submission |
 | Team roster | Ready | All three names, roles, and contact details are in README | Copy the roster into the submission form |
@@ -62,7 +62,7 @@ One submission is permitted per team. This tracker records repository readiness;
 - Runtime impact: none; the branch changes repository documentation and CI coverage only
 - GitHub About description, website, and recommended topics: updated August 16, 2026
 - Public deployment: reachable at `https://vela-care-path.fsaguilar16.chatgpt.site/`
-- Final publication step: add the verified signed-out demo-video link after upload
+- Final demo-video link: verified and published at `https://www.youtube.com/watch?v=96vTfD5ZC2M`
 
 ## Final submission sequence
 

@@ -298,7 +298,7 @@ Key references:
 
 ## Submission links
 
-- Demo video: Pending final recording and signed-out verification
+- Demo video: [Watch the VELA demo](https://www.youtube.com/watch?v=96vTfD5ZC2M)
 - Deployed application: [Open the VELA interface](https://vela-care-path.fsaguilar16.chatgpt.site/)
 - Source repository: [github.com/abhinavm27/abyss](https://github.com/abhinavm27/abyss)
 
