@@ -1,6 +1,6 @@
 import { Bell, Building2, CalendarDays, Camera, Check, ChevronRight, CircleDollarSign, Clock3, CreditCard, Download, FileCheck2, FileText, HeartHandshake, Languages, MapPin, Network, Plus, ReceiptText, ScanLine, ShieldCheck, Stethoscope, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, type CareContext, type CareJourneySnapshot, type MemberMemory, type MessagingPreference, type NotificationPreview, type PreparedReportDocument, type ReportAnalysis } from "@/lib/api";
+import { api, type CareContext, type CareJourneySnapshot, type MemberMemory, type MessagingPreference, type NotificationPreview, type PlanComparisonResult, type PreparedReportDocument, type ReportAnalysis } from "@/lib/api";
 
 export type VelaDocument = {
   id: string;
@@ -647,6 +647,22 @@ export function PreferencesTab({ journey }: { journey: CareJourneySnapshot | nul
   const [messagePreview, setMessagePreview] = useState<NotificationPreview | null>(null);
   const [messageBusy, setMessageBusy] = useState(false);
   const [messageStatus, setMessageStatus] = useState("");
+  const [comparison, setComparison] = useState<PlanComparisonResult | null>(null);
+  const [comparisonBusy, setComparisonBusy] = useState(false);
+  const [comparisonError, setComparisonError] = useState("");
+  const runComparison = async () => {
+    if (comparisonBusy) return;
+    setComparisonBusy(true);
+    setComparisonError("");
+    try {
+      const code = journey?.procedure_resolution?.code;
+      setComparison(await api.runPlanComparison({ services: code ? [{ code }] : [], household_size: 1 }));
+    } catch (error) {
+      setComparisonError(error instanceof Error ? error.message : "Plans could not be compared.");
+    } finally {
+      setComparisonBusy(false);
+    }
+  };
   useEffect(() => {
     void api.messagingPreference().then(setMessaging).catch(() => setMessaging(null));
     void api.memberMemory().then(setMemory).catch(() => setMemory(null));
@@ -699,10 +715,40 @@ export function PreferencesTab({ journey }: { journey: CareJourneySnapshot | nul
         <h1>Preferences</h1>
         <span>VELA applies these boundaries before it ranks a care path. You can change them at any time.</span>
       </header>
-      <article className="vela-alternative-path">
+      <article className="vela-alternative-path vela-plan-comparison">
         <span>Separate feature</span>
         <h2>Insurance price comparison</h2>
         <p>Explore premium and annual-cost scenarios separately from hospital matching. It does not change your current plan or interrupt an active booking journey.</p>
+        <button className="vela-plan-comparison-run" onClick={() => void runComparison()} disabled={comparisonBusy}>
+          {comparisonBusy ? "Comparing\u2026" : "Compare my plans"}
+        </button>
+        {comparisonError && <p className="vela-plan-comparison-note">{comparisonError}</p>}
+        {comparison && comparison.plans.length === 0 && (
+          <p className="vela-plan-comparison-note">
+            {comparison.message || "Upload a Summary of Benefits for at least one more plan to compare."}
+          </p>
+        )}
+        {comparison && comparison.plans.length > 0 && (
+          <div className="vela-plan-comparison-results">
+            {comparison.recommendation && <p className="vela-plan-comparison-recommendation">{comparison.recommendation.reason}</p>}
+            {comparison.plans.map((plan) => (
+              <div key={plan.plan_id} className="vela-plan-comparison-row">
+                <div className="vela-plan-comparison-label">
+                  <b>{plan.label}</b>
+                  {plan.is_current && <span className="vela-plan-comparison-current">Current</span>}
+                </div>
+                <div className="vela-plan-comparison-scenarios">
+                  <span>Predicted <b>{money(plan.scenarios.predicted.annual_total)}</b></span>
+                  <span>Possible <b>{money(plan.scenarios.possible.annual_total)}</b></span>
+                  <span>Worst case <b>{plan.scenarios.worst_case.complete ? money(plan.scenarios.worst_case.annual_total) : "unknown"}</b></span>
+                </div>
+              </div>
+            ))}
+            {comparison.unresolved_services.length > 0 && (
+              <p className="vela-plan-comparison-note">Some services could not be priced and are not included above.</p>
+            )}
+          </div>
+        )}
       </article>
       <div className="vela-preference-grid">
         <article>

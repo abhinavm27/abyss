@@ -1,4 +1,4 @@
-import { Building2, CalendarDays, Camera, Check, CircleEllipsis, FileText, History, Home, LockKeyhole, Menu, MessageCircle, Mic, Network, Phone, Plus, Send, Settings, ShieldCheck, Sparkles, Square, Upload, WalletCards, X } from "lucide-react";
+import { Building2, CalendarDays, Check, CircleEllipsis, FileText, History, Home, LockKeyhole, Menu, MessageCircle, Mic, Network, Phone, Plus, Send, Settings, ShieldCheck, Sparkles, Square, Upload, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken, type CardScan, type CareAgentResponse, type CareContext, type CareContextJourney, type CareJourneySnapshot } from "@/lib/api";
 import { VOICE_LABEL, useVoiceSession } from "@/hooks/useVoiceSession";
@@ -260,7 +260,6 @@ function MobileNav({ scene, tab, onTab, onReset }: { scene: Scene; tab: AppTab; 
 }
 
 type DocumentPromptProps = {
-  onCamera: () => void;
   onUpload: (files: FileList | null) => void;
   busy: boolean;
 };
@@ -509,15 +508,11 @@ function ChatPanel({ turns, value, busy, busyLabel, suggestions, onValue, onSend
   );
 }
 
-function ChatDocumentDock({ busy, onCamera, onUpload }: DocumentPromptProps) {
+function ChatDocumentDock({ busy, onUpload }: DocumentPromptProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   return (
     <aside className="vela-chat-document-dock" aria-label="Add insurance">
       <span>Insurance</span>
-      <button type="button" onClick={onCamera} disabled={busy} aria-label="Scan insurance card">
-        <Camera />
-        <small>Scan card</small>
-      </button>
       <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="Upload insurance card">
         <Upload />
         <small>Upload insurance</small>
@@ -1290,7 +1285,7 @@ export function VelaExperience() {
       {!mobile && <Sidebar scene={scene} tab={tab} onTab={setTab} onReset={reset} />}
       {mobile && <MobileHeader onReset={reset} />}
       {tab === "home" ? (
-        <main className={`vela-stage scene-${scene} is-neural-mode ${inputMode === "chat" ? "is-chat-mode" : "is-call-mode"}`}>
+        <main className={`vela-stage scene-${scene} is-neural-mode ${inputMode === "chat" ? "is-chat-mode" : "is-call-mode"}${notice ? " has-notice" : ""}`}>
           <NeuralPath className={(inputMode === "chat" ? !chatStarted : !voiceStarted) ? "is-hidden" : ""} progress={inputMode === "chat" ? Math.max(chatVisualProgress, chatStarted ? progress : 0, voiceLevel * 0.55) : voiceStarted ? Math.max(progress, voiceLevel * 0.55) : 0} energy={voiceLevel} resolved={resolved} />
           <div className="vela-stage-content">
             <div className="vela-mode-switch">
@@ -1342,9 +1337,9 @@ export function VelaExperience() {
               </div>
             )}
             {inputMode === "voice" && ["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
-            {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
-            {scene === "recommendation" && journey && <RecommendationCard journey={journey} onContinue={() => setTab("paths")} onExplain={() => void explainPaths()} />}
-            {scene === "consent" && <ConsentCard copy={liveMode ? verificationCopy : demoConsentCopy} onApprove={liveMode ? verifySelectedPath : () => setScene("booking")} onBack={() => (liveMode ? setTab("paths") : setScene("recommendation"))} />}
+            {inputMode === "voice" && scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
+            {inputMode === "voice" && scene === "recommendation" && journey && <RecommendationCard journey={journey} onContinue={() => setTab("paths")} onExplain={() => void explainPaths()} />}
+            {inputMode === "voice" && scene === "consent" && <ConsentCard copy={liveMode ? verificationCopy : demoConsentCopy} onApprove={liveMode ? verifySelectedPath : () => setScene("booking")} onBack={() => (liveMode ? setTab("paths") : setScene("recommendation"))} />}
             {inputMode === "voice" && scene === "booking" && (
               <section className="vela-booking-handoff">
                 <AgentPanel activeCount={4} />
@@ -1353,9 +1348,9 @@ export function VelaExperience() {
                 </button>
               </section>
             )}
-            {scene === "complete" && journey && <CompleteCard journey={journey} onAppointments={() => setTab("appointments")} onReset={reset} />}
+            {inputMode === "voice" && scene === "complete" && journey && <CompleteCard journey={journey} onAppointments={() => setTab("appointments")} onReset={reset} />}
           </div>
-          <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleInsuranceFiles([file]))} onUpload={handleInsuranceFiles} />
+          <ChatDocumentDock busy={busy} onUpload={handleInsuranceFiles} />
           {insuranceScan && <InsuranceScanReview scan={insuranceScan} onClose={() => setInsuranceScan(null)} />}
           {voiceJourneyChoice && (
             <VoiceJourneyChoice

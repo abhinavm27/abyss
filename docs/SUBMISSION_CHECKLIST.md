@@ -13,7 +13,7 @@ One submission is permitted per team. This tracker records repository readiness;
 | Challenge selected | Ready | Do Track rationale in README | Select `Do` in the form |
 | Demo video | Pending | Runbook, core loop, and deployed interface are ready | Record a 3 to 5 minute walkthrough, upload unlisted, and verify the link signed out |
 | Repository link | Ready | `https://github.com/abhinavm27/abyss` on merged `main` | Enter the repository URL in the form |
-| Deployed URL or working screen capture | Ready | `https://vela-care-path.fsaguilar16.chatgpt.site/` | Verify the final deployed build immediately before submission |
+| Deployed URL or working screen capture | Ready | `https://gn100-75f8.tailf05681.ts.net` (confirmed live via `/api/health` on August 16, 2026) | Verify the final deployed build immediately before submission |
 | Team roster | Ready | All three names, roles, and contact details are in README | Copy the roster into the submission form |
 
 ## README requirements
@@ -42,12 +42,12 @@ One submission is permitted per team. This tracker records repository readiness;
 
 | Check | Current result | Final command |
 | --- | --- | --- |
-| Python deterministic and vertical slice tests | Passing, 55 tests | `PYTHONPATH=src python3 -m unittest discover -s tests -v` |
+| Python deterministic and vertical slice tests | Passing, 119 tests (109 `unittest` + 10 `pytest`) on August 16, 2026 | `PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s tests -v` |
 | Web typecheck | Passing on merged `main` | `cd apps/web && npm run typecheck` |
 | Web production build | Passing on merged `main` | `cd apps/web && npm run build` |
 | Secret and real data scan | Passing on August 15, 2026 | Review tracked files and repository history again after any last minute change |
 | Clean install reproduction | Passing on August 15, 2026 | Re-run only if dependencies or setup instructions change |
-| Live Hermes integration | Pending final pass | Use private tunnel and authenticated gateway only |
+| Live Hermes integration | Passing on August 16, 2026 — `python3 -m abyss.cli` returned exactly `ABYSS HERMES READY` via the authenticated gateway at `HERMES_BASE_URL` (127.0.0.1:8642); confirmed no code path calls vLLM's port 8000 directly | Use private tunnel and authenticated gateway only |
 | Full UI journey | Implemented | Run the golden path three times on the final deployment before recording |
 
 ## Final submission sequence

@@ -105,17 +105,12 @@ class NewJourneyStartTests(unittest.TestCase):
             fact_names = {fact["name"] for fact in result["journey"]["facts"]}
             self.assertIn("requested_procedure", fact_names)
             self.assertIn("procedure_code", fact_names)
-            self.assertEqual(
-                result["journey"]["onboarding_missing"],
-                ["service_date", "coverage_end_date"],
-            )
-            self.assertEqual(
-                result["journey"]["onboarding_questions"],
-                [
-                    "What date do you expect to receive this care?",
-                    "When does your current coverage end?",
-                ],
-            )
+            # requested_procedure and procedure_code are already confirmed
+            # from the report; service_date and coverage_end_date are no
+            # longer required (see agents.py / journey.py), so intake has
+            # nothing left to ask for.
+            self.assertEqual(result["journey"]["onboarding_missing"], [])
+            self.assertEqual(result["journey"]["onboarding_questions"], [])
             self.assertTrue(any(
                 event["type"] == "report_orders_confirmed"
                 for event in result["journey"]["events"]

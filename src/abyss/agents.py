@@ -47,10 +47,14 @@ class OnboardingAgent:
                 text, source=source, context=context, client=self.client
             )  # type: ignore[arg-type]
         names = {fact.name for fact in facts}
+        # service_date and coverage_end_date are still extracted and recorded
+        # when a member volunteers them, but neither gates intake: service_date
+        # already has a hardcoded booking fallback, and coverage_end_date has
+        # no downstream consumer — SEP eligibility is a seeded plan-catalog
+        # boolean, not computed from this date. Requiring them just added
+        # questions that bought nothing.
         required = {
             "requested_procedure": "What care or procedure are you trying to arrange?",
-            "service_date": "What date do you expect to receive this care?",
-            "coverage_end_date": "When does your current coverage end?",
         }
         missing = tuple(name for name in required if name not in names)
         return FactProposal(tuple(facts), missing, tuple(required[name] for name in missing))

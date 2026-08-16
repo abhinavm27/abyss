@@ -310,7 +310,10 @@ def _median(values: list[float]) -> float:
     return (values[mid - 1] + values[mid]) / 2
 
 
-def cost_share_for(conn: sqlite3.Connection, qhp_plan_id: str | None, code: str):
+def cost_share_for(
+    conn: sqlite3.Connection, catalog_conn: sqlite3.Connection | None,
+    qhp_plan_id: str | None, code: str,
+):
     """The member's plan rule for the category this billing code falls under.
 
     Returns None when no plan is linked or when the code cannot be classified —
@@ -323,10 +326,13 @@ def cost_share_for(conn: sqlite3.Connection, qhp_plan_id: str | None, code: str)
     this code is a different situation from a plan that only has a blended rate,
     and conflating them understates what the member owes.
     """
-    return cost_share_status(conn, qhp_plan_id, code)[0]
+    return cost_share_status(conn, catalog_conn, qhp_plan_id, code)[0]
 
 
-def cost_share_status(conn: sqlite3.Connection, qhp_plan_id: str | None, code: str):
+def cost_share_status(
+    conn: sqlite3.Connection, catalog_conn: sqlite3.Connection | None,
+    qhp_plan_id: str | None, code: str,
+):
     """(cost_share, status) where status is one of:
 
     `applied`      — a rule for this exact service was found and used.
@@ -334,6 +340,11 @@ def cost_share_status(conn: sqlite3.Connection, qhp_plan_id: str | None, code: s
     `unclassified` — the plan has per-service rules but this code maps to no
                      category, so none of them apply.
     `uncovered`    — the code maps to a category the plan has no rule for.
+
+    `plan_benefit` (per-service rules parsed from an SBC) lives in the member's
+    own state database; `rate` (code_type/setting, to classify the code) lives
+    in the hospital knowledge catalog. `conn` and `catalog_conn` are usually two
+    different SQLite files, not two handles on the same one.
     """
     if not qhp_plan_id:
         return None, "no_plan"
@@ -344,9 +355,11 @@ def cost_share_status(conn: sqlite3.Connection, qhp_plan_id: str | None, code: s
     # The code system and the setting both change the answer: a DRG is an
     # inpatient stay, and the same surgical CPT is a different benefit depending
     # on where it happens. Indexed by idx_rate_code, so this is a point lookup.
-    row = conn.execute(
-        "SELECT code_type, setting FROM rate WHERE code = ? LIMIT 1", (code,)
-    ).fetchone()
+    row = None
+    if catalog_conn is not None:
+        row = catalog_conn.execute(
+            "SELECT code_type, setting FROM rate WHERE code = ? LIMIT 1", (code,)
+        ).fetchone()
     category = category_for_code(
         code,
         row["code_type"] if row else None,

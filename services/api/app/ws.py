@@ -65,16 +65,20 @@ def _load_plan(conn, user_id: int | None = None) -> Plan:
 
 
 def run_lookup_price(
-    conn, procedure: str, code: str | None = None, user_id: int | None = None
+    conn, catalog, procedure: str, code: str | None = None, user_id: int | None = None
 ) -> tuple[dict, dict]:
     """Execute a price lookup.
 
     Returns (compact_result_for_the_model, full_payload_for_the_ui). The model
     gets a trimmed version so it has less to hallucinate around; the UI gets the
     full record including citations and the per-line breakdown.
+
+    `conn` is the member's state database (plan, lookup history); `catalog` is
+    the hospital knowledge catalog (`rate`, `hospital`) — two different SQLite
+    files, matching the REST `/api/price` route.
     """
     if code:
-        row = conn.execute(
+        row = catalog.execute(
             "SELECT code, code_type FROM rate WHERE code = ? LIMIT 1", (code,)
         ).fetchone()
         resolution = (
@@ -83,7 +87,7 @@ def run_lookup_price(
             else retrieval.Resolution(None, None, "unknown-code", False)
         )
     else:
-        resolution = retrieval.resolve_code(conn, procedure)
+        resolution = retrieval.resolve_code(catalog, procedure)
 
     if not resolution.code:
         payload = {
@@ -114,24 +118,32 @@ def run_lookup_price(
             ],
         }, payload
 
-    prices = retrieval.prices_for_code(conn, resolution.code, resolution.code_type)
-    formula_rows = retrieval.formula_priced_count(conn, resolution.code)
+    prices = retrieval.prices_for_code(catalog, resolution.code, resolution.code_type)
+    formula_rows = retrieval.formula_priced_count(catalog, resolution.code)
 
     if not prices:
+        # Only claim formula pricing when that is actually what happened —
+        # see the identical branch in api.py's /api/price for why.
+        if formula_rows > 0:
+            message = (
+                "These hospitals publish this service as a contractual formula rather "
+                "than a dollar amount, so no estimate can be derived from the file."
+            )
+            reason = "published_as_formula"
+        else:
+            message = "No hospital in the catalog published a rate for this code."
+            reason = "no_rate_published"
         payload = {
             "query": procedure,
             "resolved": {"code": resolution.code, "code_type": resolution.code_type},
             "resolution": resolution.how,
             "hospitals": [],
             "formula_priced_rows": formula_rows,
-            "message": (
-                "These hospitals publish this service as a contractual formula rather "
-                "than a dollar amount, so no estimate can be derived from the file."
-            ),
+            "message": message,
         }
         return {
             "found": False,
-            "reason": "published_as_formula",
+            "reason": reason,
             "formula_priced_rows": formula_rows,
         }, payload
 
@@ -141,7 +153,7 @@ def run_lookup_price(
     # rate while the REST path used the real one — same question, two numbers.
     plan_row = _plan_row(conn, user_id)
     cost_share, share_status = retrieval.cost_share_status(
-        conn, plan_row["qhp_plan_id"] if plan_row else None, resolution.code
+        conn, catalog, plan_row["qhp_plan_id"] if plan_row else None, resolution.code
     )
 
     hospitals, compact = [], []
@@ -171,7 +183,7 @@ def run_lookup_price(
             plan.deductible or plan.oop_max or plan.coinsurance_pct or plan.copay
         ),
         "hospitals": hospitals,
-        "cash_prices": retrieval.cash_prices_for_code(conn, resolution.code),
+        "cash_prices": retrieval.cash_prices_for_code(catalog, resolution.code),
         "formula_priced_rows": formula_rows,
     }
     # The cheapest option, matching what is said out loud and what the REST

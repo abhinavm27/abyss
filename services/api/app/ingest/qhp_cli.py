@@ -27,7 +27,11 @@ def ingest(conn, year: str, states: set[str] | None) -> None:
         size = fetch.download(f"{PUF_BASE}/{year}/plan-attributes-puf.zip", attrs)
         print(f"  {size / 1e6:.1f} MB", flush=True)
 
-        conn.execute("DELETE FROM qhp_plan")
+        # Member-uploaded SBC plans live in this same table (see
+        # api.py's SBC_PLAN_PREFIX) and are referenced by plan.qhp_plan_id via
+        # a foreign key — only replace real marketplace catalog rows, never a
+        # member's own uploaded plan.
+        conn.execute("DELETE FROM qhp_plan WHERE plan_id NOT LIKE 'SBC-UPLOADED:%'")
         batch: list[tuple] = []
         n_plans = 0
         for row in qhp.parse_plan_attributes(attrs, states):
@@ -59,7 +63,9 @@ def ingest(conn, year: str, states: set[str] | None) -> None:
         size = fetch.download(f"{PUF_BASE}/{year}/benefits-and-cost-sharing-puf.zip", bencs)
         print(f"  {size / 1e6:.1f} MB (375 MB unzipped, streamed)", flush=True)
 
-        conn.execute("DELETE FROM plan_benefit")
+        conn.execute(
+            """DELETE FROM plan_benefit WHERE plan_id NOT LIKE 'SBC-UPLOADED:%'"""
+        )
         batch.clear()
         n_benefits = 0
         for row in qhp.parse_benefits(bencs, states):

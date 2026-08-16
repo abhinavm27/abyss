@@ -3,23 +3,28 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from abyss.memory import PersistentMemoryStore
 from abyss.messaging import (
     MessagingError,
     allowed_destinations,
+    appointment_notification_preview,
     consent_destination,
     messaging_adapter,
     normalize_destination,
     notification_preview,
+    provider_list_notification_preview,
     redacted_destination,
 )
+
+_MESSAGE_KIND_PATTERN = "^(result_link|appointment_confirmed|provider_list)$"
 
 
 class MessagingPreferenceIn(BaseModel):
@@ -28,24 +33,124 @@ class MessagingPreferenceIn(BaseModel):
     channel: str = Field(default="discord", pattern="^(discord|twilio)$")
 
 
-class NotificationIn(BaseModel):
-    result_ref: str = Field(min_length=1, max_length=200)
+class NotificationPreviewIn(BaseModel):
+    """Which real record to build a notification from.
+
+    Exactly one reference is required, matching message_kind: result_ref for
+    result_link, appointment_id for appointment_confirmed, journey_id for
+    provider_list. The route looks the record up itself and scopes it to the
+    requesting member — none of this is trusted from the client as text.
+    """
+
+    message_kind: str = Field(default="result_link", pattern=_MESSAGE_KIND_PATTERN)
+    result_ref: str | None = Field(default=None, max_length=200)
+    appointment_id: str | None = Field(default=None, max_length=200)
+    journey_id: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _require_matching_reference(self) -> "NotificationPreviewIn":
+        needed = {
+            "result_link": self.result_ref,
+            "appointment_confirmed": self.appointment_id,
+            "provider_list": self.journey_id,
+        }[self.message_kind]
+        if not needed or not needed.strip():
+            raise ValueError(f"{self.message_kind} requires its matching reference field")
+        return self
+
+
+class NotificationIn(NotificationPreviewIn):
     consent_scope: str = Field(min_length=1, max_length=500)
     consent_approved: bool
-    message_kind: str = Field(default="result_link", pattern="^result_link$")
-
-
-class NotificationPreviewIn(BaseModel):
-    result_ref: str = Field(min_length=1, max_length=200)
-    message_kind: str = Field(default="result_link", pattern="^result_link$")
 
 
 def _preview_ref(scope: str) -> str:
     return "message-preview:" + hashlib.sha256(scope.encode("utf-8")).hexdigest()
 
 
-def build_messaging_router(*, get_conn, require_user) -> APIRouter:
+def _fetch_appointment_dict(
+    conn: sqlite3.Connection, catalog_conn: sqlite3.Connection, appointment_id: str, user_id: int
+) -> dict | None:
+    """A member's own appointment, with its hospital name joined from the catalog.
+
+    `appointment.hospital_id` references the knowledge catalog's `hospital`
+    table, not this state database — the two are different SQLite files with
+    the same schema (see api.py's list_appointments for the identical pattern).
+    """
+    row = conn.execute(
+        "SELECT * FROM appointment WHERE appointment_id=? AND user_id=?",
+        (appointment_id, user_id),
+    ).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    hospital_name = None
+    if result.get("hospital_id") is not None:
+        hospital_row = catalog_conn.execute(
+            "SELECT name FROM hospital WHERE id=?", (result["hospital_id"],)
+        ).fetchone()
+        hospital_name = hospital_row["name"] if hospital_row else None
+    result["hospital"] = hospital_name or "your selected facility"
+    return result
+
+
+def _fetch_provider_list(
+    conn: sqlite3.Connection, journey_id: str, user_id: int
+) -> tuple[str, list[dict]] | None:
+    """A member's own journey's procedure and priced hospital options.
+
+    Reads the persisted snapshot rather than the process-local live journey
+    registry — notifications should reflect the same durable record the
+    member sees on reload, and must work after a server restart.
+    """
+    row = conn.execute(
+        "SELECT snapshot_json FROM care_journey WHERE journey_id=? AND user_id=?",
+        (journey_id, user_id),
+    ).fetchone()
+    if row is None:
+        return None
+    snapshot = json.loads(row["snapshot_json"])
+    options = snapshot.get("current_plan_options") or []
+    procedure = "your requested care"
+    for fact in snapshot.get("facts", []):
+        if fact.get("name") == "requested_procedure" and fact.get("value"):
+            procedure = str(fact["value"])
+            break
+    return procedure, options
+
+
+def build_messaging_router(*, get_conn, require_user, get_catalog_conn) -> APIRouter:
     router = APIRouter(tags=["messaging"])
+
+    def build_preview(
+        body: "NotificationPreviewIn",
+        conn: sqlite3.Connection,
+        catalog: sqlite3.Connection,
+        user_id: int,
+        pref: dict,
+    ):
+        if body.message_kind == "result_link":
+            return notification_preview(
+                body.result_ref, pref["destination_label"],
+                channel=pref["channel"], message_kind="result_link",
+            )
+        if body.message_kind == "appointment_confirmed":
+            appointment = _fetch_appointment_dict(conn, catalog, body.appointment_id, user_id)
+            if appointment is None:
+                raise MessagingError("that appointment was not found")
+            return appointment_notification_preview(
+                appointment, pref["destination_label"], channel=pref["channel"],
+            )
+        if body.message_kind == "provider_list":
+            found = _fetch_provider_list(conn, body.journey_id, user_id)
+            if found is None:
+                raise MessagingError("that journey was not found")
+            procedure, options = found
+            return provider_list_notification_preview(
+                body.journey_id, procedure, options, pref["destination_label"],
+                channel=pref["channel"],
+            )
+        raise MessagingError("unsupported message kind")
 
     def preference(conn: sqlite3.Connection, user_id: int) -> dict:
         row = conn.execute(
@@ -89,7 +194,7 @@ def build_messaging_router(*, get_conn, require_user) -> APIRouter:
         except MessagingError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         now = datetime.now(UTC).isoformat()
-        scope = f"enable link-only {body.channel} notifications -> {consent_destination(body.channel, destination)}"
+        scope = f"enable {body.channel} notifications -> {consent_destination(body.channel, destination)}"
         conn.execute(
             """INSERT INTO messaging_preference
                (user_id,channel,destination_label,enabled,consent_scope,consented_at,updated_at)
@@ -117,18 +222,14 @@ def build_messaging_router(*, get_conn, require_user) -> APIRouter:
     def preview_notification(
         body: NotificationPreviewIn,
         conn: sqlite3.Connection = Depends(get_conn),
+        catalog: sqlite3.Connection = Depends(get_catalog_conn),
         user_id: int = Depends(require_user),
     ):
         pref = preference(conn, user_id)
         if not pref["enabled"]:
             raise HTTPException(status_code=409, detail="enable notifications first")
         try:
-            item = notification_preview(
-                body.result_ref,
-                pref["destination_label"],
-                channel=pref["channel"],
-                message_kind=body.message_kind,
-            )
+            item = build_preview(body, conn, catalog, user_id, pref)
             redacted = redacted_destination(item.channel, item.destination_label)
         except MessagingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -157,6 +258,7 @@ def build_messaging_router(*, get_conn, require_user) -> APIRouter:
     def send_notification(
         body: NotificationIn,
         conn: sqlite3.Connection,
+        catalog: sqlite3.Connection,
         user_id: int,
     ):
         pref = preference(conn, user_id)
@@ -165,12 +267,7 @@ def build_messaging_router(*, get_conn, require_user) -> APIRouter:
         if not body.consent_approved:
             raise HTTPException(status_code=409, detail="exact message approval is required")
         try:
-            item = notification_preview(
-                body.result_ref,
-                pref["destination_label"],
-                channel=pref["channel"],
-                message_kind=body.message_kind,
-            )
+            item = build_preview(body, conn, catalog, user_id, pref)
             if body.consent_scope != item.consent_scope:
                 raise MessagingError("the exact channel, destination, and message kind are not approved")
             previewed = conn.execute(
@@ -215,9 +312,10 @@ def build_messaging_router(*, get_conn, require_user) -> APIRouter:
     def notify(
         body: NotificationIn,
         conn: sqlite3.Connection = Depends(get_conn),
+        catalog: sqlite3.Connection = Depends(get_catalog_conn),
         user_id: int = Depends(require_user),
     ):
-        return send_notification(body, conn, user_id)
+        return send_notification(body, conn, catalog, user_id)
 
     # Backward-compatible endpoint name used by the previous frontend. It sends
     # through the user's configured channel rather than bypassing preferences.
@@ -225,8 +323,9 @@ def build_messaging_router(*, get_conn, require_user) -> APIRouter:
     def notify_legacy(
         body: NotificationIn,
         conn: sqlite3.Connection = Depends(get_conn),
+        catalog: sqlite3.Connection = Depends(get_catalog_conn),
         user_id: int = Depends(require_user),
     ):
-        return send_notification(body, conn, user_id)
+        return send_notification(body, conn, catalog, user_id)
 
     return router

@@ -152,8 +152,12 @@ The seeded deterministic engine and its tests require no credentials. Live Nemot
 
 ### 2. Run the deterministic test suite
 
+Use the venv's Python with `services/api` on the path — bare `python3` lacks
+FastAPI and silently skips 9 tests (messaging, Discord, voice-WS, journey
+start) instead of running them.
+
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s tests -v
 ```
 
 ### 3. Run the API

@@ -178,6 +178,13 @@ button { color: inherit; }
   height: 100%;
   padding: 82px 7% 40px;
   text-align: center;
+  /* .vela-stage has overflow:hidden to contain the decorative background
+     (.vela-network, ::before) — without this, content taller than the fixed
+     .vela-shell box (e.g. the agent panel once the journey advances) is
+     simply clipped with no way to reach it. Scoping the scroll to this inner
+     box, rather than .vela-stage itself, keeps the background clipped as
+     before while the actual content becomes reachable. */
+  overflow-y: auto;
 }
 
 .vela-eyebrow {
@@ -251,7 +258,10 @@ button { color: inherit; }
 .vela-listener.is-reasoning .vela-orb { background: radial-gradient(circle, #fff 0 7%, #ffd88d 26%, rgba(236,172,70,.2) 49%, transparent 70%); filter: drop-shadow(0 8px 25px rgba(213,148,45,.18)); }
 
 .vela-start { margin-top: 30px; }
-.vela-start p { margin: 0 0 14px; color: #697894; font-size: 14px; }
+/* Right padding clears .vela-chat-document-dock, which floats over this
+   column at `right: 22px` — without it, long lines of this paragraph wrap
+   underneath the dock and are visually clipped. */
+.vela-start p { margin: 0 0 14px; padding: 0 130px 0 20px; color: #697894; font-size: 14px; }
 .vela-start button {
   display: inline-flex;
   align-items: center;
@@ -400,6 +410,13 @@ button { color: inherit; }
   font-size: 12px;
   backdrop-filter: blur(15px);
 }
+/* .vela-notice is position:absolute, pinned near the bottom of .vela-stage.
+   On shorter viewports the stage's centered content column — the "Start
+   voice" button in particular — sits low enough to land underneath it. This
+   reserves clearance whenever a notice is actually showing (`has-notice`,
+   set alongside the `notice` state in VelaExperience.tsx), rather than
+   permanently shrinking the content column. */
+.vela-stage.has-notice .vela-stage-content { padding-bottom: 130px; }
 .vela-notice span { flex: 1; }
 .vela-notice button { display: grid; place-items: center; width: 25px; height: 25px; border: 0; border-radius: 50%; background: #eef3f7; cursor: pointer; }
 .vela-notice svg { width: 14px; }
@@ -463,6 +480,17 @@ button { color: inherit; }
 .vela-path-selected p,.vela-alternative-path p,.vela-matching-reason p { margin: 0; color: #64768d; font-size: 11px; line-height: 1.55; }
 .vela-path-selected > b { display: inline-block; margin-top: 10px; color: #168a77; font-size: 9px; }
 .vela-alternative-path { margin-top: 18px; border-color: rgba(196,139,51,.23); background: linear-gradient(135deg,rgba(253,246,231,.86),rgba(255,255,255,.7)); }.vela-alternative-path > span { color: #a66d1d; }
+.vela-plan-comparison-run { margin-top: 12px; padding: 9px 16px; border: 1px solid rgba(196,139,51,.35); border-radius: 10px; background: #fff; color: #a66d1d; font-size: 10px; font-weight: 600; cursor: pointer; }
+.vela-plan-comparison-run:disabled { opacity: .6; cursor: default; }
+.vela-plan-comparison-note { margin-top: 10px; color: #8a5a1a; font-size: 10px; }
+.vela-plan-comparison-results { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.vela-plan-comparison-recommendation { margin: 0; padding: 9px 11px; border-radius: 9px; background: rgba(27,171,146,.12); color: #147a67; font-size: 10px; line-height: 1.5; }
+.vela-plan-comparison-row { padding: 11px 13px; border: 1px solid rgba(28,53,84,.1); border-radius: 11px; background: rgba(255,255,255,.75); }
+.vela-plan-comparison-label { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #1c3554; }
+.vela-plan-comparison-current { padding: 1px 7px; border-radius: 100px; background: rgba(28,53,84,.08); color: #4a5a71; font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
+.vela-plan-comparison-scenarios { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; color: #64768d; font-size: 9px; }
+.vela-plan-comparison-scenarios b { color: #1c3554; font-weight: 600; }
+
 .vela-explain-paths { margin-top: 13px; padding: 11px 14px; border: 1px solid rgba(24,117,189,.2); border-radius: 10px; color: #176fb4; background: rgba(255,255,255,.64); cursor: pointer; }
 .vela-matching-reason { margin-top: 12px; border-color: rgba(24,117,189,.18); background: rgba(237,247,251,.74); }.vela-matching-reason b { display: block; margin-bottom: 7px; color: #146fab; font-size: 9px; text-transform: uppercase; }
 .vela-journey-history { margin-top: 28px; }.vela-journey-history h2 { font: 400 22px var(--vela-serif); }.vela-journey-history button { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 8px; padding: 13px 15px; border: 1px solid rgba(28,53,84,.1); border-radius: 12px; color: #294665; background: rgba(255,255,255,.65); text-align: left; }.vela-journey-history button span { display: grid; gap: 3px; }.vela-journey-history small { color: #78879a; font-size: 9px; }.vela-journey-history svg { width: 15px; }
@@ -636,6 +664,7 @@ button { color: inherit; }
 
   .vela-stage { min-height: 100dvh; padding: calc(82px + env(safe-area-inset-top)) 0 calc(92px + env(safe-area-inset-bottom)); overflow-x: hidden; overflow-y: auto; }
   .vela-stage-content { min-height: calc(100dvh - 170px); height: auto; padding: 62px 24px 135px; }
+  .vela-stage.has-notice .vela-stage-content { padding-bottom: 210px; }
   .vela-eyebrow { min-height: 16px; margin-bottom: 9px; font-size: 9px; }
   .vela-stage h1 { max-width: 100%; font-size: clamp(39px, 12vw, 56px); line-height: 1.08; }
   .vela-listener { width: 112%; margin-top: 25px; }
@@ -648,7 +677,9 @@ button { color: inherit; }
   .scene-documents .vela-network { opacity: .45; }
   .scene-recommendation .vela-network, .scene-consent .vela-network, .scene-complete .vela-network { height: 65%; }
   .vela-start { margin-top: 33px; }
-  .vela-start p { padding: 0 20px; line-height: 1.5; }
+  /* Clears the mobile dock (`right: 8px`, ~58px wide) — see the desktop rule
+     above for the same fix at the wider breakpoint. */
+  .vela-start p { padding: 0 80px 0 20px; line-height: 1.5; }
   .vela-prompt { margin-top: 25px; padding: 0 13px; font-size: 15px; }
   .vela-document-card { width: 100%; margin-top: 20px; }
   .vela-document-card button { padding: 19px 6px; font-size: 15px; }

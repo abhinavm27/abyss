@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .domain import ConsentAction, DecisionFact, VerificationStatus
-from .hermes_client import HermesClient
+from .hermes_client import HermesClient, HermesError
 
 SYSTEM_PROMPT = """You are Hermes, the explanation layer inside ABYSS.
 Use only the structured evidence supplied with the question. Never invent,
@@ -160,6 +160,55 @@ def extract_explicit_facts(
             consent_required=ConsentAction.PROCESS_DOCUMENTS,
         ))
     return facts
+
+
+INTAKE_PHRASING_PROMPT = """You are the ABYSS intake voice. Ask the member for
+the still-missing details listed below, the way a warm, attentive human intake
+call would — conversational, not a form. Ask about everything on the list, in
+one natural message. You may combine, reorder, or lightly rephrase the listed
+items, but you must not ask about anything not on the list, must not invent
+additional questions, must not answer on the member's behalf, and must not
+give medical advice. Keep it brief — two sentences at most."""
+
+
+def phrase_intake_request(
+    questions: list[str], *, continuing: bool, client: HermesClient | None = None
+) -> str:
+    """Ask Nemotron to phrase a request for exactly these missing facts.
+
+    Mirrors `explain()`: the model explains/phrases, it never decides. The
+    deterministic `questions` list — computed by `OnboardingAgent.extract` from
+    what is actually missing — is the only thing that may be asked about; the
+    model cannot add to or subtract from it. Falls back to a plain
+    concatenation on any Hermes failure so a model outage never blocks intake.
+    """
+    if not questions:
+        raise ValueError("questions are required")
+    fallback = (
+        ("Thanks — I saved that." if continuing else "Absolutely — I can help with that.")
+        + " " + (
+            questions[0] if len(questions) == 1
+            else f"I need {len(questions)} details before I can match hospitals accurately: "
+                 f"{' '.join(questions)} You can answer them together in one message."
+        )
+    )
+    try:
+        hermes = client or HermesClient()
+        reply = hermes.chat(
+            [
+                {"role": "system", "content": INTAKE_PHRASING_PROMPT},
+                {"role": "user", "content": json.dumps({
+                    "continuing_existing_conversation": continuing,
+                    "still_needed": questions,
+                }, separators=(",", ":"))},
+            ],
+            max_tokens=150,
+            temperature=0.3,
+        )
+    except HermesError:
+        return fallback
+    reply = reply.strip()
+    return reply if reply else fallback
 
 
 def explain(question: str, evidence: dict[str, Any], client: HermesClient | None = None) -> str:

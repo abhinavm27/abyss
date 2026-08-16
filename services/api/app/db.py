@@ -95,7 +95,11 @@ CREATE TABLE IF NOT EXISTS plan (
   coinsurance_pct REAL NOT NULL DEFAULT 0,
   copay           REAL,
   oop_max         REAL NOT NULL DEFAULT 0,
-  oop_met         REAL NOT NULL DEFAULT 0
+  oop_met         REAL NOT NULL DEFAULT 0,
+  -- Member-reported, not published anywhere machine-readable — an SBC does not
+  -- carry a premium figure. 0 means "not provided", not "free", so the annual
+  -- comparison must say so rather than silently pricing coverage at $0/mo.
+  monthly_premium REAL NOT NULL DEFAULT 0
 );
 
 -- Marketplace plans from the CMS QHP Plan Attributes PUF.
@@ -288,6 +292,27 @@ def connect(db_path: str | os.PathLike[str] | None = None) -> sqlite3.Connection
     return conn
 
 
+def connect_catalog(db_path: str | os.PathLike[str] | None) -> sqlite3.Connection | None:
+    """Read-only connection to the hospital knowledge catalog, or None.
+
+    `retrieval.py`'s helpers (`resolve_code`, `prices_for_code`, `search`, ...)
+    were written against `rate` / `hospital` / `rate_fts`. Those tables live in
+    the knowledge catalog configured by `ABYSS_KNOWLEDGE_DB`, not in the
+    per-request state database `connect()` opens — the two are different SQLite
+    files with the same schema. Returns None when no catalog is configured, so
+    callers can say so honestly instead of querying an unrelated, empty table.
+    """
+    if not db_path:
+        return None
+    path = Path(db_path)
+    if not path.is_file():
+        return None
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     migrate(conn)
@@ -299,7 +324,10 @@ def init_db(conn: sqlite3.Connection) -> None:
 # work on a fresh database and fail on the developer's — which holds 39.6M rates
 # that are not going to be re-ingested.
 _ADDED_COLUMNS = {
-    "plan": [("user_id", "INTEGER"), ("is_active", "INTEGER NOT NULL DEFAULT 1")],
+    "plan": [
+        ("user_id", "INTEGER"), ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+        ("monthly_premium", "REAL NOT NULL DEFAULT 0"),
+    ],
     "lookup_history": [("user_id", "INTEGER")],
     "appointment": [
         ("appointment_id", "TEXT"),

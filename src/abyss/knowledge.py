@@ -87,6 +87,8 @@ class HospitalKnowledgeCatalog(Protocol):
 
     def prices_for_code(self, code: str) -> list[PublishedHospitalRate]: ...
 
+    def catalog_status(self) -> dict: ...
+
 
 class NoHospitalKnowledgeCatalog:
     """Default for unit tests and installations without a catalog configured."""
@@ -96,11 +98,17 @@ class NoHospitalKnowledgeCatalog:
     def prices_for_code(self, code: str) -> list[PublishedHospitalRate]:
         return []
 
+    def catalog_status(self) -> dict:
+        return {"status": "not_configured", "hospitals": 0, "rates": 0}
+
 
 class SeededHospitalKnowledgeCatalog:
     """Explicitly synthetic fallback for demos without a configured database."""
 
     source_name = "seeded_synthetic_seattle_hospital_catalog"
+
+    def catalog_status(self) -> dict:
+        return {"status": "synthetic_fixture", "hospitals": 1, "rates": 1}
 
     def prices_for_code(self, code: str) -> list[PublishedHospitalRate]:
         normalized_code = code.strip().upper()
@@ -210,6 +218,27 @@ class SQLiteHospitalKnowledgeCatalog:
                 parsed = parsed.replace(tzinfo=UTC)
             return parsed.astimezone(UTC)
         return None
+
+    def catalog_status(self) -> dict:
+        """Cheap check of whether the catalog is actually usable, for health checks.
+
+        `COUNT(*) FROM rate` is a full scan of millions of rows — the same
+        problem the state database's health check had. Read the row count
+        ANALYZE already recorded in `sqlite_stat1` instead. `hospital` is a
+        handful of rows and safe to count directly.
+        """
+        try:
+            with self._connect() as conn:
+                hospitals = conn.execute("SELECT COUNT(*) FROM hospital").fetchone()[0]
+                stat_row = conn.execute(
+                    "SELECT stat FROM sqlite_stat1 WHERE tbl = 'rate' LIMIT 1"
+                ).fetchone()
+                rates = int(str(stat_row[0]).split()[0]) if stat_row and stat_row[0] else 0
+        except (sqlite3.Error, KnowledgeCatalogError) as exc:
+            return {"status": "unavailable", "hospitals": 0, "rates": 0, "detail": str(exc)}
+        if hospitals == 0 or rates == 0:
+            return {"status": "empty", "hospitals": hospitals, "rates": rates}
+        return {"status": "ready", "hospitals": hospitals, "rates": rates}
 
     def prices_for_code(self, code: str) -> list[PublishedHospitalRate]:
         normalized_code = code.strip().upper()

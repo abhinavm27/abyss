@@ -24,7 +24,11 @@ Before implementation work, read:
 
 ## Commands
 
+Use `.venv/bin/python` and include `services/api` on the path — bare `python3`
+lacks FastAPI and silently skips 9 tests (messaging, Discord, voice-WS, journey
+start) instead of running them.
+
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src:services/api .venv/bin/python -m unittest discover -s tests -v
 PYTHONPATH=src python3 -m abyss.cli
 ```

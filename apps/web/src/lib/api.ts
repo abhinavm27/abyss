@@ -301,6 +301,63 @@ export interface PlanComparison {
   message?: string;
 }
 
+export interface PlanComparisonScenarioLineItem {
+  code: string;
+  description: string | null;
+  hospital: string | null;
+  allowed_amount: number | null;
+  member_cost: number | null;
+  cost_share_status: string;
+}
+
+export interface PlanComparisonScenario {
+  name: string;
+  annual_premium: number;
+  care_cost: number;
+  annual_total: number;
+  complete: boolean;
+  line_items: PlanComparisonScenarioLineItem[];
+}
+
+export interface PlanComparisonPlan {
+  plan_id: number;
+  label: string;
+  payer_name: string | null;
+  is_current: boolean;
+  qhp_plan_id: string | null;
+  monthly_premium: number;
+  premium_provided: boolean;
+  key_details: {
+    deductible: number;
+    deductible_remaining: number;
+    oop_max: number | null;
+    oop_remaining: number | null;
+    coinsurance_pct: number | null;
+    copay: number | null;
+    cost_sharing_source: "per_service" | "blended";
+  };
+  scenarios: {
+    predicted: PlanComparisonScenario;
+    possible: PlanComparisonScenario;
+    worst_case: PlanComparisonScenario;
+  };
+}
+
+export interface PlanComparisonResult {
+  household_size: number;
+  plans: PlanComparisonPlan[];
+  unresolved_services: { query: string | null; code: string | null; candidates: string[] }[];
+  recommendation: {
+    recommended_plan_id: number;
+    recommended_label: string;
+    current_plan_id: number;
+    current_label: string;
+    estimated_annual_savings: { predicted: number; possible: number; worst_case: number };
+    reason: string;
+  } | null;
+  message?: string;
+}
+
 export interface CareJourneySnapshot {
   journey_id: string;
   stage: string;
@@ -882,6 +939,9 @@ export const api = {
   comparePlans: (q: string) =>
     req<PlanComparison>(`/api/plans/compare?q=${encodeURIComponent(q)}`),
 
+  runPlanComparison: (body: { services: { query?: string; code?: string }[]; household_size?: number; current_plan_id?: number | null }) =>
+    req<PlanComparisonResult>("/api/plan-comparison", { method: "POST", body: JSON.stringify(body) }),
+
   activatePlan: (planId: number) =>
     req<{ ok: boolean }>(`/api/plans/${planId}/activate`, { method: "POST" }),
 
@@ -948,16 +1008,23 @@ export const api = {
       body: JSON.stringify({ enabled, destination_label: destinationLabel }),
     }),
 
-  notificationPreview: (resultRef: string) =>
+  // provider_list carries the journey's real, priced hospital options in the
+  // message body itself (not just a link) — see appointment_notification_preview
+  // / provider_list_notification_preview in the backend for how it's built and
+  // integrity-checked between preview and send.
+  notificationPreview: (journeyId: string) =>
     req<NotificationPreview>("/api/results/notify/preview", {
       method: "POST",
-      body: JSON.stringify({ result_ref: resultRef }),
+      body: JSON.stringify({ message_kind: "provider_list", journey_id: journeyId }),
     }),
 
-  sendNotification: (resultRef: string, consentScope: string) =>
+  sendNotification: (journeyId: string, consentScope: string) =>
     req<NotificationReceipt>("/api/results/notify", {
       method: "POST",
-      body: JSON.stringify({ result_ref: resultRef, consent_scope: consentScope, consent_approved: true }),
+      body: JSON.stringify({
+        message_kind: "provider_list", journey_id: journeyId,
+        consent_scope: consentScope, consent_approved: true,
+      }),
     }),
 
 

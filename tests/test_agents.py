@@ -39,8 +39,15 @@ class AgentRoleTests(TestCase):
         proposal = OnboardingAgent(model).extract("knee MRI", source="synthetic-referral")
         self.assertEqual(proposal.facts[0].verification_status.value, "inferred")
         self.assertEqual(proposal.facts[0].consent_required.value, "process_documents")
-        self.assertIn("service_date", proposal.missing)
-        self.assertIn("What date do you expect to receive this care?", proposal.questions)
+        # The model's fact is named "procedure", not "requested_procedure" —
+        # but extract_facts' deterministic fallback also recognises "knee MRI"
+        # in the raw text and appends a requested_procedure fact of its own,
+        # satisfying the only fact still required (service_date and
+        # coverage_end_date no longer are — see agents.py), so nothing is
+        # missing.
+        self.assertIn("requested_procedure", {fact.name for fact in proposal.facts})
+        self.assertEqual(proposal.missing, ())
+        self.assertEqual(proposal.questions, ())
 
     def test_onboarding_rejects_model_authority_fields(self):
         model = FakeModel('{"facts":[{"name":"plan","value":"A","confidence":1,"decision":"choose"}]}')

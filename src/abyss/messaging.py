@@ -113,9 +113,24 @@ def _validate_preview(preview: MessagePreview, approved_scope: str, channel: str
         raise MessagingError("the exact message scope is not approved")
     if preview.destination_label not in allowed_destinations(channel):
         raise MessagingError("the messaging destination is not allowlisted")
-    expected = f"Your VELA update is ready: {preview.secure_link}"
-    if not preview.secure_link or preview.body != expected:
-        raise MessagingError("ordinary notifications must contain only the approved secure link")
+    if preview.message_kind == "result_link":
+        expected = f"Your VELA update is ready: {preview.secure_link}"
+        if not preview.secure_link or preview.body != expected:
+            raise MessagingError("ordinary notifications must contain only the approved secure link")
+        return
+    # Richer kinds (appointment_confirmed, provider_list) carry real data in
+    # the body rather than a bare link. Their consent_scope embeds a hash of
+    # the exact body text computed at preview time — see
+    # appointment_notification_preview / provider_list_notification_preview.
+    # Re-checking that hash here, against the body actually being sent,
+    # guarantees the member approved this exact text: if the underlying
+    # appointment or hospital options changed between preview and send, the
+    # route rebuilds the body fresh from current data and the hash will no
+    # longer match, so the send is refused rather than silently sending
+    # stale or altered facts.
+    body_hash = hashlib.sha256(preview.body.encode("utf-8")).hexdigest()[:16]
+    if body_hash not in preview.consent_scope:
+        raise MessagingError("the exact message body is not approved")
 
 
 def notification_preview(
@@ -139,6 +154,87 @@ def notification_preview(
     body = f"Your VELA update is ready: {link}"
     scope = f"send {selected}:{message_kind}:{reference} -> {consent_destination(selected, destination)}"
     return MessagePreview(selected, destination, reference, body, scope, message_kind, link)
+
+
+def appointment_notification_preview(
+    appointment: dict[str, Any],
+    destination_label: str,
+    *,
+    channel: str,
+) -> MessagePreview:
+    """Build a member-reviewable notification carrying real appointment facts.
+
+    `appointment` must come from a DB row the caller already scoped to the
+    requesting member — this function trusts it as given rather than looking
+    anything up itself, so ownership checks belong to the route, not here.
+    """
+    destination = normalize_destination(channel, destination_label)
+    if destination not in allowed_destinations(channel):
+        raise MessagingError("the messaging destination is not allowlisted")
+    reference = str(appointment.get("appointment_id") or "").strip()
+    hospital = str(appointment.get("hospital") or "").strip()
+    if not reference or not hospital:
+        raise MessagingError("the appointment is missing required fields")
+    public_url = os.getenv("ABYSS_PUBLIC_APP_URL", "http://100.102.193.84:4173").rstrip("/")
+    link = f"{public_url}/#appointments?result={quote(reference, safe='')}"
+    when = str(appointment.get("booked_for") or "").strip() or "a date to be confirmed"
+    cost = appointment.get("estimated_cost")
+    cost_text = f"${cost:,.2f}" if isinstance(cost, (int, float)) else "an amount to be confirmed"
+    status = str(appointment.get("status") or "confirmed").strip()
+    body = (
+        f"VELA appointment {status}: {hospital} on {when}. "
+        f"Estimated cost: {cost_text}. Details: {link}"
+    )
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+    scope = (
+        f"send {channel}:appointment_confirmed:{reference}:{body_hash} "
+        f"-> {consent_destination(channel, destination)}"
+    )
+    return MessagePreview(channel, destination, reference, body, scope, "appointment_confirmed", link)
+
+
+def provider_list_notification_preview(
+    journey_id: str,
+    procedure: str,
+    options: list[dict[str, Any]],
+    destination_label: str,
+    *,
+    channel: str,
+) -> MessagePreview:
+    """Build a member-reviewable notification listing real, priced hospital options.
+
+    `options` must come from the journey's own persisted current_plan_options
+    — already source-backed published rates, per care_paths.HospitalCareOption
+    — never model-guessed prices.
+    """
+    destination = normalize_destination(channel, destination_label)
+    if destination not in allowed_destinations(channel):
+        raise MessagingError("the messaging destination is not allowlisted")
+    reference = journey_id.strip()
+    if not reference:
+        raise MessagingError("a journey is required")
+    if not options:
+        raise MessagingError("no hospital options are available to send yet")
+    public_url = os.getenv("ABYSS_PUBLIC_APP_URL", "http://100.102.193.84:4173").rstrip("/")
+    link = f"{public_url}/#paths?journey={quote(reference, safe='')}"
+    lines = []
+    for index, option in enumerate(options[:5], start=1):
+        hospital = str(option.get("hospital") or "an unnamed facility").strip()
+        cost = option.get("estimated_member_cost")
+        cost_text = f"${cost:,.2f}" if isinstance(cost, (int, float)) else "cost pending"
+        lines.append(f"{index}) {hospital} — {cost_text}")
+    procedure_label = procedure.strip() or "your requested care"
+    body = (
+        f"VELA hospital options for {procedure_label}:\n"
+        + "\n".join(lines)
+        + f"\nFull comparison: {link}"
+    )
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+    scope = (
+        f"send {channel}:provider_list:{reference}:{body_hash} "
+        f"-> {consent_destination(channel, destination)}"
+    )
+    return MessagePreview(channel, destination, reference, body, scope, "provider_list", link)
 
 
 class _SandboxAdapter:
@@ -185,7 +281,17 @@ class DiscordMessagingAdapter:
                 "username": os.getenv("DISCORD_WEBHOOK_USERNAME", "vela")[:80],
                 "allowed_mentions": {"parse": []},
             }).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            # Discord's edge (Cloudflare) blocks urllib's default User-Agent
+            # ("Python-urllib/3.x") outright with a 403 (Cloudflare error
+            # 1010), independent of whether the webhook itself is valid —
+            # confirmed by testing the exact same request with and without
+            # this header against the real webhook. Any identifiable UA
+            # clears it; this follows Discord's own documented convention
+            # for API clients (name, URL, version).
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "VELA (https://github.com/abhinavm27/abyss, 1.0)",
+            },
             method="POST",
         )
         try:

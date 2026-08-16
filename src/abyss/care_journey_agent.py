@@ -23,6 +23,8 @@ class JourneyIntent(StrEnum):
     RESCHEDULE_APPOINTMENT = "reschedule_appointment"
     JOURNEY_STATUS = "journey_status"
     LIST_JOURNEYS = "list_journeys"
+    COMPARE_PLANS = "compare_plans"
+    FIND_PLANS = "find_plans"
     UNKNOWN = "unknown"
 
 
@@ -71,7 +73,8 @@ Classify the user's message using only the supplied synthetic user-care context.
 Return only JSON with these exact keys:
 intent, target_journey_id, target_appointment_id, steps, reuse, refresh, missing.
 intent must be one of new_care_request, continue_journey,
-reschedule_appointment, journey_status, list_journeys, unknown.
+reschedule_appointment, journey_status, list_journeys, compare_plans, find_plans,
+unknown.
 Use only journey and appointment IDs present in context. Plan read-only or
 permissioned steps; never claim an action was completed, never grant consent,
 never choose coverage, and never provide medical advice.
@@ -82,7 +85,17 @@ is active. Resolve short replies against the active journey's pending_questions
 and intake_facts. If the message answers a pending question, use
 continue_journey and target that journey. Use journey_status only when the user
 is actually asking for status; words that are part of a procedure description,
-such as "complete" in "abdominal ultrasound, complete", are not status requests."""
+such as "complete" in "abdominal ultrasound, complete", are not status requests.
+Use compare_plans when the user asks to compare cost, price, or coverage across
+their insurance plans — for example "compare my plans", "which plan is
+cheaper", or "what would this cost on my other plan". This only requests a
+comparison; it never selects a plan, states a price, or invents a second plan
+that was not already uploaded.
+Use find_plans when the user asks to find, browse, or see available insurance
+plans in general — for example "show me some insurance plans", "what plans are
+available", or "find me a marketplace plan in Texas". This only lists real or
+clearly-labeled sample plan options; it never selects, links, or activates a
+plan for the member."""
 
 
 class CareJourneyAgent:

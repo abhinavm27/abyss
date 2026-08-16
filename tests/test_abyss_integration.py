@@ -176,7 +176,10 @@ class AbyssCrossWorkstreamIntegrationTests(unittest.TestCase):
 
             app = FastAPI()
             app.include_router(
-                build_messaging_router(get_conn=lambda: conn, require_user=lambda: 1)
+                build_messaging_router(
+                    get_conn=lambda: conn, require_user=lambda: 1,
+                    get_catalog_conn=lambda: conn,
+                )
             )
             with TestClient(app) as client, patch(
                 "services.api.app.messaging_routes.messaging_adapter",

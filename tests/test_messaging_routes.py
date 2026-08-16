@@ -45,7 +45,9 @@ class MessagingRouteTests(unittest.TestCase):
             return 1
 
         app = FastAPI()
-        app.include_router(build_messaging_router(get_conn=get_conn, require_user=require_user))
+        app.include_router(build_messaging_router(
+            get_conn=get_conn, require_user=require_user, get_catalog_conn=get_conn,
+        ))
         self.client = TestClient(app)
 
     def tearDown(self) -> None:

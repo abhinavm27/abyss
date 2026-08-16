@@ -8,19 +8,22 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Event, Thread
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from abyss.agent import explain
+from abyss.agent import explain, phrase_intake_request
 from abyss.adapters import ActionReceipt
 from abyss.booking import BookingSlot
 from abyss.care_journey_agent import CareJourneyAgent, JourneyIntent
 from abyss.care_paths import CarePathSelection
+from abyss.catalogs import SeededCatalog
 from abyss.hermes_client import HermesError
 from abyss.domain import ConsentAction, DecisionFact, VerificationStatus
 from abyss.journey import CareJourney
@@ -37,6 +40,12 @@ from .report_routes import build_report_intake_router
 from .discord_routes import build_discord_router
 from .ingest import sbc
 from .estimator import Plan, estimate
+from .plan_comparison import (
+    EVENT_BUNDLES,
+    PricedService,
+    simulate_annual_scenario,
+    worst_case_scenario,
+)
 from .ws import voice_endpoint
 
 app = FastAPI(title="VELA", version="0.1.0")
@@ -102,6 +111,48 @@ def get_conn():
         conn.close()
 
 
+def get_catalog_conn():
+    """The hospital knowledge catalog, as a plain connection for `retrieval.py`.
+
+    `retrieval.py`'s SQL is schema-compatible with the catalog but was written
+    against a raw `sqlite3.Connection`, not `HospitalKnowledgeCatalog`. Raises
+    rather than silently falling back to the empty state database, so a
+    misconfigured catalog fails loudly instead of reporting fabricated results.
+    """
+    knowledge_db = os.environ.get("ABYSS_KNOWLEDGE_DB")
+    conn = db.connect_catalog(knowledge_db)
+    if conn is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Hospital price catalog is not configured on this server "
+                   "(ABYSS_KNOWLEDGE_DB is unset or unreadable).",
+        )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def get_catalog_conn_optional():
+    """The hospital knowledge catalog, or None if it isn't configured.
+
+    For endpoints where pricing/catalog data is only *one* of several things
+    they can do (care_agent_message handles status checks, rescheduling, etc.
+    too) — those must not hard-fail just because pricing happens to be
+    unavailable. Callers that reach a catalog-dependent branch with `None`
+    here are expected to say so honestly, not silently substitute the empty
+    state database (which is what get_catalog_conn's hard failure exists to
+    prevent in the first place).
+    """
+    knowledge_db = os.environ.get("ABYSS_KNOWLEDGE_DB")
+    conn = db.connect_catalog(knowledge_db)
+    try:
+        yield conn
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 # --- authentication ---------------------------------------------------------
 
 
@@ -121,7 +172,9 @@ def require_user(user_id: int | None = Depends(optional_user)) -> int:
 
 
 app.include_router(build_memory_router(get_conn=get_conn, require_user=require_user))
-app.include_router(build_messaging_router(get_conn=get_conn, require_user=require_user))
+app.include_router(build_messaging_router(
+    get_conn=get_conn, require_user=require_user, get_catalog_conn=get_catalog_conn,
+))
 
 
 class AgentChatIn(BaseModel):
@@ -296,10 +349,19 @@ def _persist_journey_projection(journey: CareJourney, payload: dict) -> None:
         confirmed = selected and journey.booking_service.slot(selected.slot_id)
         if confirmed and confirmed.status == "booked":
             appointment_id = f"appointment-{journey.journey_id}-{confirmed.slot_id}"
-            local_hospital = conn.execute(
-                "SELECT id FROM hospital WHERE id=?", (confirmed.hospital_id,)
-            ).fetchone()
-            local_hospital_id = confirmed.hospital_id if local_hospital else None
+            # `hospital` lives in the knowledge catalog, not this state database —
+            # checking it against `conn` always failed and silently dropped a
+            # valid hospital_id from every confirmed appointment.
+            local_hospital_id = None
+            catalog_conn = db.connect_catalog(os.environ.get("ABYSS_KNOWLEDGE_DB"))
+            if catalog_conn is not None:
+                try:
+                    known = catalog_conn.execute(
+                        "SELECT id FROM hospital WHERE id=?", (confirmed.hospital_id,)
+                    ).fetchone()
+                    local_hospital_id = confirmed.hospital_id if known else None
+                finally:
+                    catalog_conn.close()
             conn.execute(
                 """INSERT INTO appointment
                    (appointment_id,user_id,journey_id,slot_id,hospital_id,code,description,
@@ -390,8 +452,13 @@ def _owned_journey(journey_id: str | None, user_id: int) -> CareJourney | None:
 
 
 def _prepare_chat_care_options(journey: CareJourney) -> bool:
-    """Advance a complete chat-only intake through read-only comparison."""
-    required = {"requested_procedure", "procedure_code", "service_date", "coverage_end_date"}
+    """Advance a complete chat-only intake through read-only comparison.
+
+    service_date and coverage_end_date are no longer required here, matching
+    journey.py's onboarding gate — neither is consumed by comparison/pricing;
+    see the note on journey.py's refresh_onboarding_requirements.
+    """
+    required = {"requested_procedure", "procedure_code"}
     if (
         journey.stage.value != "intake"
         or journey.onboarding_missing
@@ -494,12 +561,19 @@ app.include_router(build_report_intake_router(
 def _intake_reply(
     journey: CareJourney, *, continuing: bool, voice: bool = False
 ) -> str:
+    """Ask for whatever intake facts are still missing, conversationally.
+
+    Which facts are missing, and their exact wording, comes entirely from
+    `journey.onboarding_questions` — deterministic app code, unchanged by this
+    function. Nemotron only phrases the request; see `agent.phrase_intake_request`.
+    A model outage falls back to plain concatenation, so intake never blocks.
+    """
     questions = list(dict.fromkeys(journey.onboarding_questions))
     if not questions:
         return "I have the intake details. I’m checking your current-plan hospital options now."
-    lead = "Thanks — I saved that." if continuing else "Absolutely — I can help with that."
     if voice:
-        # Spoken turns should ask one thing at a time. Procedure specificity is
+        # Spoken turns ask one thing at a time — a long multi-part spoken
+        # question is harder to answer than typed. Procedure specificity is
         # needed to query the catalog, so ask it before timing or coverage.
         priorities = (
             "body area",
@@ -513,13 +587,8 @@ def _intake_reply(
             (item for key in priorities for item in questions if key in item.lower()),
             questions[0],
         )
-        return f"{lead} {question}"
-    if len(questions) == 1:
-        return f"{lead} {questions[0]}"
-    return (
-        f"{lead} I need {len(questions)} details before I can match hospitals accurately: "
-        f"{' '.join(questions)} You can answer them together in one message."
-    )
+        questions = [question]
+    return phrase_intake_request(questions, continuing=continuing)
 
 
 def _restore_completed_journey(
@@ -681,19 +750,50 @@ def _restore_booking_journey(
     return journey
 
 
-def _open_journey(user_id: int, *, seed_defaults: bool = True) -> CareJourney:
+def _member_preference(
+    conn: sqlite3.Connection, user_id: int, name: str, default: str
+) -> tuple[str, str]:
+    """A member's own recorded preference if one exists, else the seed default.
+
+    Returns (value, source) so the caller can record accurate provenance —
+    "member_memory" for a real recalled fact promoted from a prior journey
+    (see _persist_journey_projection), "seeded_user_profile" for the demo
+    fallback used the first time a member has no history yet.
+    """
+    facts = PersistentMemoryStore(conn).view(user_id)["current_facts"]
+    for fact in facts:
+        if fact["name"] == name:
+            return str(fact["value"]), "member_memory"
+    return default, "seeded_user_profile"
+
+
+def _open_journey(
+    user_id: int, *, seed_defaults: bool = True, conn: sqlite3.Connection | None = None
+) -> CareJourney:
     journey_id = f"journey-{uuid.uuid4().hex[:12]}"
     journey = CareJourney.open(journey_id, user_id=str(user_id), **_journey_dependencies())
     if seed_defaults:
         now = datetime.now(timezone.utc)
-        for name, value in (
-            ("requested_procedure", "MRI knee without contrast"),
-            ("preferred_provider", "Dr. Lee"),
-            ("preferred_facility", "Seattle General"),
-        ):
-            journey.record_fact(DecisionFact(
-                name, value, "user_request", now, 1.0, VerificationStatus.SOURCE_BACKED
-            ))
+        provider, provider_source = (
+            _member_preference(conn, user_id, "preferred_provider", "Dr. Lee")
+            if conn is not None else ("Dr. Lee", "seeded_user_profile")
+        )
+        facility, facility_source = (
+            _member_preference(conn, user_id, "preferred_facility", "Seattle General")
+            if conn is not None else ("Seattle General", "seeded_user_profile")
+        )
+        journey.record_fact(DecisionFact(
+            "requested_procedure", "MRI knee without contrast", "user_request",
+            now, 1.0, VerificationStatus.SOURCE_BACKED,
+        ))
+        journey.record_fact(DecisionFact(
+            "preferred_provider", provider, provider_source, now, 1.0,
+            VerificationStatus.SOURCE_BACKED,
+        ))
+        journey.record_fact(DecisionFact(
+            "preferred_facility", facility, facility_source, now, 1.0,
+            VerificationStatus.SOURCE_BACKED,
+        ))
     _journeys[journey_id] = journey
     return journey
 
@@ -729,12 +829,15 @@ def get_care_context(
 def care_agent_message(
     body: CareAgentMessageIn,
     conn: sqlite3.Connection = Depends(get_conn),
+    catalog: sqlite3.Connection | None = Depends(get_catalog_conn_optional),
     user_id: int = Depends(require_user),
 ):
     context = _user_care_context(conn, user_id)
     utterance_id = body.utterance_id or f"utterance-{uuid.uuid4().hex[:12]}"
     correlation_id = body.correlation_id or f"correlation-{uuid.uuid4().hex[:12]}"
     plan = None
+    plan_comparison_result = None
+    plan_search_result = None
     voice = body.channel == "voice"
     try:
         plan = (
@@ -773,10 +876,11 @@ def care_agent_message(
             else:
                 journey = _open_journey(user_id, seed_defaults=False)
             now = datetime.now(timezone.utc)
-            for name, value in (("preferred_provider", "Dr. Lee"),
-                                ("preferred_facility", "Seattle General")):
+            for name, default in (("preferred_provider", "Dr. Lee"),
+                                  ("preferred_facility", "Seattle General")):
+                value, source = _member_preference(conn, user_id, name, default)
                 journey.record_fact(DecisionFact(
-                    name, value, "seeded_user_profile", now, 1.0,
+                    name, value, source, now, 1.0,
                     VerificationStatus.SOURCE_BACKED,
                 ))
             journey.onboard(
@@ -848,6 +952,56 @@ def care_agent_message(
                 active = context["journeys"][0] if context["journeys"] else None
                 reply = (f"Your most recent journey is at the {active['stage']} stage."
                          if active else "You do not have a care journey yet.")
+        elif plan.intent == JourneyIntent.COMPARE_PLANS:
+            # Hermes does not reliably echo target_journey_id for compare_plans,
+            # so fall back to the caller's active journey, then the member's
+            # most recent journey — the same fallback JOURNEY_STATUS already
+            # uses when the model omits a target.
+            if journey is None:
+                journey = _owned_journey(body.active_journey_id, user_id)
+            if journey is None and context["journeys"]:
+                journey = _owned_journey(context["journeys"][0]["journey_id"], user_id)
+            procedure_code = None
+            if journey is not None:
+                code_fact = journey.workflow.care_state.facts.get("procedure_code")
+                procedure_code = str(code_fact.value) if code_fact else None
+            if catalog is None:
+                reply = "Plan comparison needs the hospital price catalog, which isn't available right now."
+            elif procedure_code is None:
+                reply = (
+                    "I can compare your plans once I know what care this is for — "
+                    "what procedure or visit should I compare costs for?"
+                )
+            else:
+                plan_count = conn.execute(
+                    "SELECT COUNT(*) c FROM plan WHERE user_id IS ?", (user_id,)
+                ).fetchone()["c"]
+                if plan_count < 2:
+                    reply = (
+                        "You only have one plan on file right now. Upload a Summary "
+                        "of Benefits for another plan in Documents, and I can compare them."
+                    )
+                    plan_comparison_result = None
+                else:
+                    plan_comparison_result = _run_plan_comparison(
+                        conn, catalog, user_id,
+                        [PlanComparisonServiceIn(code=procedure_code)],
+                        household_size=1,
+                    )
+                    reply = _plan_comparison_reply(plan_comparison_result)
+        elif plan.intent == JourneyIntent.FIND_PLANS:
+            state = _extract_state_from_text(body.text)
+            has_real_data = state is not None and conn.execute(
+                "SELECT 1 FROM qhp_plan WHERE state = ? LIMIT 1", (state,)
+            ).fetchone() is not None
+            if has_real_data:
+                plan_search_result = _run_plan_search(conn, state, limit=3)
+                reply = _plan_search_reply(plan_search_result)
+            else:
+                plan_search_result = _sample_plan_search_result()
+                reply = _plan_search_reply(plan_search_result, sample=True)
+                if state is not None:
+                    reply = f"I don't have marketplace plan data on file for {state} yet. " + reply
         else:
             reply = "Are you starting new care, continuing a journey, checking status, or rescheduling an appointment?"
     except HermesError as exc:
@@ -877,6 +1031,8 @@ def care_agent_message(
         "plan": plan.as_dict(),
         "journey": journey_payload,
         "context": refreshed_context,
+        "plan_comparison": plan_comparison_result,
+        "plan_search": plan_search_result,
     }
 
 
@@ -926,6 +1082,13 @@ def _voice_care_turn(
     """Run a spoken turn through the exact same authenticated journey path."""
     conn = db.connect()
     db.init_db(conn)
+    # care_agent_message now takes `catalog` as a FastAPI Depends parameter;
+    # this is a plain function call that bypasses dependency injection
+    # entirely, so it must be supplied explicitly or Python would pass the
+    # unresolved Depends() object through instead of a real connection. None
+    # is a valid value here — care_agent_message degrades honestly (only the
+    # compare_plans branch actually needs pricing data).
+    catalog = db.connect_catalog(os.environ.get("ABYSS_KNOWLEDGE_DB"))
     try:
         context = _user_care_context(conn, user_id)
         reply_plan = _care_journey_agent.explicit_pending_reply_plan(
@@ -945,9 +1108,12 @@ def _voice_care_turn(
                 reply_to_pending=reply_plan is not None,
             ),
             conn=conn,
+            catalog=catalog,
             user_id=user_id,
         )
     finally:
+        if catalog is not None:
+            catalog.close()
         conn.close()
 
 
@@ -990,18 +1156,27 @@ def _discord_member_turn(conn: sqlite3.Connection, user_id: int, text: str) -> d
         utterance_id=utterance_id,
         correlation_id=correlation_id,
     )
-    result = care_agent_message(
-        CareAgentMessageIn(
-            text=text,
-            active_journey_id=active_id,
-            utterance_id=utterance_id,
-            correlation_id=correlation_id,
-            channel="discord",
-            reply_to_pending=explicit is not None,
-        ),
-        conn=conn,
-        user_id=user_id,
-    )
+    # Plain function call, bypasses FastAPI dependency injection — see the
+    # identical note in _voice_care_turn for why `catalog` must be supplied
+    # explicitly here. None is valid; care_agent_message degrades honestly.
+    catalog = db.connect_catalog(os.environ.get("ABYSS_KNOWLEDGE_DB"))
+    try:
+        result = care_agent_message(
+            CareAgentMessageIn(
+                text=text,
+                active_journey_id=active_id,
+                utterance_id=utterance_id,
+                correlation_id=correlation_id,
+                channel="discord",
+                reply_to_pending=explicit is not None,
+            ),
+            conn=conn,
+            catalog=catalog,
+            user_id=user_id,
+        )
+    finally:
+        if catalog is not None:
+            catalog.close()
     return {
         "reply": str(result["reply"])[:1800],
         "user_id": user_id,
@@ -1352,6 +1527,9 @@ class PlanIn(BaseModel):
     copay: float | None = None
     oop_max: float = 0
     oop_met: float = 0
+    # Member-reported — no published source carries this figure, an SBC least
+    # of all. 0 means "not provided"; the annual comparison must say so.
+    monthly_premium: float = 0
 
 
 def _active_plan_row(conn: sqlite3.Connection, user_id: int | None):
@@ -1400,18 +1578,22 @@ def _qhp_plan_id(conn: sqlite3.Connection, user_id: int | None = None) -> str | 
 def health(conn: sqlite3.Connection = Depends(get_conn)):
     """Liveness, and the headline figures.
 
-    The rate count comes from the planner's statistics rather than a COUNT(*):
-    counting 39.6M rows took 32 seconds and this is the first request the app
-    makes, so it timed out the dev proxy and the app never started.
+    `state_database` and `knowledge_catalog` are reported separately and
+    truthfully: the state database holds accounts, sessions and journeys and
+    is expected to have zero hospitals and zero rates — the catalog is where
+    those live. Conflating the two previously made an empty catalog report as
+    "ready" because the (irrelevant) state database was reachable.
     """
-    hospitals = conn.execute("SELECT COUNT(*) c FROM hospital").fetchone()["c"]
+    catalog_status = _hospital_knowledge.catalog_status() if hasattr(
+        _hospital_knowledge, "catalog_status"
+    ) else {"status": "unknown", "hospitals": 0, "rates": 0}
     return {
         "ok": True,
-        "rates": db.approximate_rate_count(conn),
-        "hospitals": hospitals,
+        "rates": catalog_status.get("rates", 0),
+        "hospitals": catalog_status.get("hospitals", 0),
         "state_database": "ready",
         "knowledge_catalog": {
-            "status": "ready",
+            **catalog_status,
             "source": _hospital_knowledge.source_name,
             "access": "read_only",
             "network_status_authority": False,
@@ -1420,10 +1602,10 @@ def health(conn: sqlite3.Connection = Depends(get_conn)):
 
 
 @app.get("/api/hospitals")
-def hospitals(conn: sqlite3.Connection = Depends(get_conn)):
+def hospitals(catalog: sqlite3.Connection = Depends(get_catalog_conn)):
     # rows_written from the last ingest, rather than COUNT(*) per hospital —
     # grouping 39.6M rows to render a list would take half a minute.
-    rows = conn.execute(
+    rows = catalog.execute(
         """SELECT h.id, h.name, h.address, h.last_updated_on, h.mrf_url,
                   COALESCE((SELECT i.rows_written FROM ingest_run i
                             WHERE i.hospital_id = h.id
@@ -1479,10 +1661,12 @@ def put_plan(
     conn.execute("DELETE FROM plan WHERE user_id IS ?", (user_id,))
     cur = conn.execute(
         """INSERT INTO plan (user_id, is_active, label, payer_name, qhp_plan_id, deductible,
-                             deductible_met, coinsurance_pct, copay, oop_max, oop_met)
-           VALUES (?,1,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                             deductible_met, coinsurance_pct, copay, oop_max, oop_met,
+                             monthly_premium)
+           VALUES (?,1,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
         (user_id, body.label, body.payer_name, body.qhp_plan_id, body.deductible,
-         body.deductible_met, body.coinsurance_pct, body.copay, body.oop_max, body.oop_met),
+         body.deductible_met, body.coinsurance_pct, body.copay, body.oop_max, body.oop_met,
+         body.monthly_premium),
     )
     plan_id = cur.fetchone()[0]
     conn.commit()
@@ -1626,6 +1810,9 @@ class SbcApplyIn(BaseModel):
     deductible_met: float = 0
     oop_max: float = 0
     oop_met: float = 0
+    # Not on the SBC itself — the member types this in separately. 0 means
+    # "not provided", not "free coverage".
+    monthly_premium: float = 0
     benefits: list[SbcBenefitIn] = []
     # Keep the plan already stored and add this one alongside it, so the two can
     # be compared. Off by default: onboarding is replacing, not accumulating.
@@ -1697,10 +1884,11 @@ def apply_sbc(
         conn.execute("DELETE FROM plan WHERE user_id IS ?", (user_id,))
     cur = conn.execute(
         """INSERT INTO plan (user_id, is_active, label, payer_name, qhp_plan_id, deductible,
-                             deductible_met, coinsurance_pct, copay, oop_max, oop_met)
-           VALUES (?,1,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                             deductible_met, coinsurance_pct, copay, oop_max, oop_met,
+                             monthly_premium)
+           VALUES (?,1,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
         (user_id, body.label or "Uploaded plan", body.payer_name, SBC_PLAN_ID, body.deductible,
-         body.deductible_met, 0.0, None, body.oop_max, body.oop_met),
+         body.deductible_met, 0.0, None, body.oop_max, body.oop_met, body.monthly_premium),
     )
     plan_id = cur.fetchone()[0]
     conn.commit()
@@ -1722,19 +1910,21 @@ def plan_states(conn: sqlite3.Connection = Depends(get_conn)):
     return [{"state": r["state"], "plans": r["n"]} for r in rows]
 
 
-@app.get("/api/plans/search")
-def search_plans(
+def _run_plan_search(
+    conn: sqlite3.Connection,
     state: str,
     q: str | None = None,
     metal: str | None = None,
     limit: int = 25,
-    conn: sqlite3.Connection = Depends(get_conn),
-):
+) -> dict:
     """Find a marketplace plan to link, so estimates use its real cost sharing.
 
     Only federal-platform states are present — the CMS Public Use Files do not
-    cover state-run marketplaces (MA, RI, CA, NY and others). Those members, and
-    anyone on employer coverage, enter their benefits by hand instead.
+    cover state-run marketplaces (MA, RI, CA, NY, WA and others). Those members,
+    and anyone on employer coverage, enter their benefits by hand instead.
+
+    Shared by the REST route (`GET /api/plans/search`) and the conversational
+    `find_plans` intent — one implementation, one source of truth.
     """
     # A PUF plan id ends in a variant suffix: -00 off-exchange, -01 standard
     # on-exchange, -02 and up are cost-sharing-reduction variants that only
@@ -1762,6 +1952,17 @@ def search_plans(
     return {"state": state.upper(), "count": len(rows), "plans": rows}
 
 
+@app.get("/api/plans/search")
+def search_plans(
+    state: str,
+    q: str | None = None,
+    metal: str | None = None,
+    limit: int = 25,
+    conn: sqlite3.Connection = Depends(get_conn),
+):
+    return _run_plan_search(conn, state, q, metal, limit)
+
+
 @app.get("/api/plans/{plan_id}/benefits")
 def plan_benefits(plan_id: str, conn: sqlite3.Connection = Depends(get_conn)):
     """Every service category's cost-sharing rule for one plan."""
@@ -1781,6 +1982,7 @@ def price(
     q: str,
     code: str | None = None,
     conn: sqlite3.Connection = Depends(get_conn),
+    catalog: sqlite3.Connection = Depends(get_catalog_conn),
     user_id: int | None = Depends(optional_user),
 ):
     """Answer a price question, personalised to the stored plan.
@@ -1791,16 +1993,20 @@ def price(
 
     Pass `code` to price a specific billing code directly — that is how the
     client confirms one of the candidates offered when a query is ambiguous.
+
+    Hospital and rate data always comes from `catalog` (the hospital knowledge
+    catalog); `conn` (the member's own state database) is used only for their
+    plan and lookup history.
     """
     if code:
-        row = conn.execute(
+        row = catalog.execute(
             "SELECT code, code_type FROM rate WHERE code = ? LIMIT 1", (code,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail=f"unknown code {code}")
         resolution = retrieval.Resolution(row["code"], row["code_type"], "confirmed", True)
     else:
-        resolution = retrieval.resolve_code(conn, q)
+        resolution = retrieval.resolve_code(catalog, q)
 
     if not resolution.code:
         return {
@@ -1828,27 +2034,38 @@ def price(
         }
 
     code, code_type, how = resolution.code, resolution.code_type, resolution.how
-    prices = retrieval.prices_for_code(conn, code, code_type)
-    formula_only = retrieval.formula_priced_count(conn, code)
+    prices = retrieval.prices_for_code(catalog, code, code_type)
+    formula_only = retrieval.formula_priced_count(catalog, code)
 
     if not prices:
-        # The code exists but no hospital published a dollar figure for it.
+        # The code resolved, but no hospital in the catalog published a usable
+        # rate for it. Only claim formula pricing when that is actually what
+        # happened — `formula_only` is the count of formula-priced (not
+        # dollar-priced) rows for this code; if it is zero, no hospital
+        # published anything for this code at all, formula or otherwise, and
+        # saying so is the honest answer rather than a guessed cause.
+        if formula_only > 0:
+            message = (
+                "These hospitals publish this service as a contractual formula rather "
+                "than a dollar amount, so no estimate can be derived from the file."
+            )
+        else:
+            message = (
+                "No hospital in the catalog published a rate for this code."
+            )
         return {
             "query": q,
             "resolved": {"code": code, "code_type": code_type},
             "resolution": how,
             "hospitals": [],
             "formula_priced_rows": formula_only,
-            "message": (
-                "These hospitals publish this service as a contractual formula rather "
-                "than a dollar amount, so no estimate can be derived from the file."
-            ),
+            "message": message,
         }
 
     plan = _load_plan(conn, user_id)
     plan_configured = plan.deductible or plan.oop_max or plan.coinsurance_pct or plan.copay
     cost_share, share_status = retrieval.cost_share_status(
-        conn, _qhp_plan_id(conn, user_id), code
+        conn, catalog, _qhp_plan_id(conn, user_id), code
     )
 
     results = []
@@ -1882,7 +2099,7 @@ def price(
             if cost_share else None
         ),
         "hospitals": results,
-        "cash_prices": retrieval.cash_prices_for_code(conn, code),
+        "cash_prices": retrieval.cash_prices_for_code(catalog, code),
         "formula_priced_rows": formula_only,
     }
 
@@ -1960,6 +2177,7 @@ def delete_one_plan(
 def compare_plans(
     q: str,
     conn: sqlite3.Connection = Depends(get_conn),
+    catalog: sqlite3.Connection = Depends(get_catalog_conn),
     user_id: int = Depends(require_user),
 ):
     """What one procedure costs under each plan the member holds.
@@ -1973,12 +2191,12 @@ def compare_plans(
     silently omitted it while looking complete would be worse than one that says
     so.
     """
-    resolution = retrieval.resolve_code(conn, q)
+    resolution = retrieval.resolve_code(catalog, q)
     if not resolution.code or not resolution.confident:
         return {"query": q, "resolved": None, "plans": [],
                 "message": "Name the procedure a little more precisely to compare plans."}
 
-    prices = retrieval.prices_for_code(conn, resolution.code)
+    prices = retrieval.prices_for_code(catalog, resolution.code)
     if not prices:
         return {"query": q, "resolved": {"code": resolution.code}, "plans": [],
                 "message": "No hospital publishes a dollar price for this yet."}
@@ -1997,7 +2215,7 @@ def compare_plans(
             payer_name=row["payer_name"], label=row["label"],
         )
         share, share_status = retrieval.cost_share_status(
-            conn, row["qhp_plan_id"], resolution.code
+            conn, catalog, row["qhp_plan_id"], resolution.code
         )
         est = estimate(
             cheapest.typical, plan, low_allowed=cheapest.low, high_allowed=cheapest.high,
@@ -2018,6 +2236,321 @@ def compare_plans(
     }
 
 
+@dataclass
+class _ResolvedService:
+    """A stated service anchored to one code and its cheapest published hospital.
+
+    Every plan is priced against the same hospital-service pair — same
+    anchoring principle as `/api/plans/compare` — so the plan is the only
+    thing that varies between rows in the comparison.
+    """
+
+    code: str
+    description: str | None
+    hospital: str | None
+    allowed_amount: float | None
+
+
+def _resolve_service(catalog: sqlite3.Connection, code: str, code_type: str | None = None) -> _ResolvedService:
+    prices = retrieval.prices_for_code(catalog, code, code_type)
+    if not prices:
+        return _ResolvedService(code=code, description=None, hospital=None, allowed_amount=None)
+    cheapest = prices[0]
+    return _ResolvedService(
+        code=code, description=cheapest.description, hospital=cheapest.hospital,
+        allowed_amount=cheapest.typical,
+    )
+
+
+class PlanComparisonServiceIn(BaseModel):
+    """A service the member expects to use this year, by plain language or code."""
+
+    query: str | None = None
+    code: str | None = None
+
+
+class PlanComparisonIn(BaseModel):
+    services: list[PlanComparisonServiceIn] = []
+    household_size: int = Field(1, ge=1)
+    # Defaults to the member's first-uploaded plan — the natural reading of
+    # "what they have now" when nothing else says otherwise.
+    current_plan_id: int | None = None
+
+
+US_STATE_ABBREVIATIONS = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
+    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE",
+    "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
+    "new mexico": "NM", "new york": "NY", "north carolina": "NC",
+    "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR",
+    "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA",
+    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+    "district of columbia": "DC",
+}
+
+
+def _extract_state_from_text(text: str) -> str | None:
+    """A deterministic state lookup, not a model guess.
+
+    Matches a full state name, or a standalone two-letter abbreviation the
+    member typed in capitals, in their own words — so find_plans never has to
+    ask Hermes to invent a location the member did not actually say. The
+    abbreviation check stays case-sensitive against the original text on
+    purpose: matching case-insensitively would treat ordinary words like "me"
+    or "in" as Maine/Indiana in ordinary sentences such as "show me plans".
+    """
+    lowered = f" {text.lower()} "
+    for name, abbrev in US_STATE_ABBREVIATIONS.items():
+        if f" {name} " in lowered:
+            return abbrev
+    for abbrev in set(US_STATE_ABBREVIATIONS.values()):
+        if re.search(rf"\b{abbrev}\b", text):
+            return abbrev
+    return None
+
+
+def _plan_search_reply(result: dict, *, sample: bool = False) -> str:
+    """State the real plans found in one spoken-friendly sentence.
+
+    Never states a plan that isn't already in `result` — this only narrates
+    _run_plan_search's own output, or the seeded sample catalog's own records.
+    """
+    plans = result.get("plans") or []
+    if not plans:
+        return (
+            f"I don't have marketplace plan data on file for {result.get('state', 'that state')} yet."
+        )
+    lead = "Here are a few sample plans" if sample else f"Here are a few {result['state']} marketplace plans"
+    parts = []
+    for p in plans[:3]:
+        parts.append(
+            f"{p['marketing_name']} from {p['issuer_name']} ({p['metal_level'].title() if p.get('metal_level') else 'unrated'}) "
+            f"— ${p['deductible']:,.0f} deductible, ${p['oop_max']:,.0f} out-of-pocket max"
+        )
+    return lead + ": " + "; ".join(parts) + "."
+
+
+def _sample_plan_search_result() -> dict:
+    """The seeded Washington demo catalog, presented as sample plans.
+
+    WA runs its own exchange, so it is structurally absent from the free CMS
+    Public Use Files _run_plan_search reads — this is the same seeded synthetic
+    catalog journey.py already uses for plan-feasibility evaluation, reused
+    here rather than inventing new numbers. Excludes "continuation", which
+    represents the member's current plan, not a plan to discover.
+    """
+    catalog = SeededCatalog()
+    plans = [
+        {
+            "plan_id": record.plan_id,
+            "state": "WA",
+            "issuer_name": "Sample catalog",
+            "marketing_name": record.name,
+            "metal_level": None,
+            "plan_type": None,
+            "hsa_eligible": None,
+            "deductible": record.deductible_exposure,
+            "oop_max": record.expected_care_oop,
+        }
+        for record in catalog.plans.values()
+        if not record.is_current
+    ]
+    return {"state": "WA", "count": len(plans), "plans": plans}
+
+
+def _plan_comparison_reply(result: dict) -> str:
+    """State the real comparison numbers in one spoken-friendly sentence.
+
+    Mirrors _care_options_reply's style: lead with the useful result. Never
+    states a number that isn't already in `result` — this only narrates
+    _run_plan_comparison's own output.
+    """
+    plans = result.get("plans") or []
+    if not plans:
+        return result.get("message") or "I could not compare your plans right now."
+    recommendation = result.get("recommendation")
+    if recommendation:
+        savings = recommendation["estimated_annual_savings"]["predicted"]
+        return (
+            f"Comparing your {len(plans)} plans — {recommendation['recommended_label']} "
+            f"has the lower predicted annual cost, about ${savings:,.2f} less than "
+            f"{recommendation['current_label']} this year."
+        )
+    cheapest = plans[0]
+    return (
+        f"Comparing your {len(plans)} plans, {cheapest['label']} has the lowest "
+        f"predicted annual cost at about ${cheapest['scenarios']['predicted']['annual_total']:,.2f}."
+    )
+
+
+def _run_plan_comparison(
+    conn: sqlite3.Connection,
+    catalog: sqlite3.Connection,
+    user_id: int,
+    services: list["PlanComparisonServiceIn"],
+    household_size: int,
+    current_plan_id: int | None = None,
+) -> dict:
+    """EMME's core deliverable: predicted / possible / worst-case annual cost
+    across every plan the member has uploaded an SBC for.
+
+    Predicted uses only the services the member actually named. Possible adds
+    a real, catalog-priced injury bundle (a household of two or more also gets
+    a concussion bundle) — EMME's "predicted + a broken arm". Worst case is the
+    plan's out-of-pocket maximum, not an itemised guess. A plan whose OOP max
+    was never provided is reported incomplete for that scenario rather than
+    silently priced as unbounded or free.
+
+    Shared by the REST route (`POST /api/plan-comparison`) and the
+    conversational `compare_plans` intent — one implementation, so a typed
+    request and a spoken one can never drift into two different answers.
+    """
+    plan_rows = conn.execute(
+        "SELECT * FROM plan WHERE user_id IS ? ORDER BY id", (user_id,)
+    ).fetchall()
+    if not plan_rows:
+        return {
+            "plans": [],
+            "recommendation": None,
+            "message": "Upload a Summary of Benefits for at least one plan to compare costs.",
+        }
+
+    resolved_services: list[_ResolvedService] = []
+    unresolved: list[dict] = []
+    for item in services:
+        if item.code:
+            row = catalog.execute(
+                "SELECT code, code_type FROM rate WHERE code = ? LIMIT 1", (item.code,)
+            ).fetchone()
+            resolution = (
+                retrieval.Resolution(row["code"], row["code_type"], "confirmed", True)
+                if row else retrieval.Resolution(None, None, "unknown-code", False)
+            )
+        elif item.query:
+            resolution = retrieval.resolve_code(catalog, item.query)
+        else:
+            continue
+        if not resolution.code or not resolution.confident:
+            unresolved.append({
+                "query": item.query, "code": item.code,
+                "candidates": resolution.candidates,
+            })
+            continue
+        resolved_services.append(_resolve_service(catalog, resolution.code, resolution.code_type))
+
+    possible_extra: list[_ResolvedService] = []
+    for event_name, codes in EVENT_BUNDLES.items():
+        if event_name == "concussion" and household_size < 2:
+            continue
+        possible_extra.extend(_resolve_service(catalog, code, code_type) for code, code_type in codes)
+
+    current_plan_id = current_plan_id or plan_rows[0]["id"]
+
+    def _priced(service: _ResolvedService, qhp_plan_id: str | None) -> PricedService:
+        if service.allowed_amount is None:
+            return PricedService(
+                code=service.code, description=service.description, hospital=service.hospital,
+                allowed_amount=None, cost_share=None, cost_share_status="unpriced",
+            )
+        cost_share, status = retrieval.cost_share_status(conn, catalog, qhp_plan_id, service.code)
+        return PricedService(
+            code=service.code, description=service.description, hospital=service.hospital,
+            allowed_amount=service.allowed_amount, cost_share=cost_share, cost_share_status=status,
+        )
+
+    plan_results = []
+    for row in plan_rows:
+        plan = Plan(
+            deductible=row["deductible"], deductible_met=row["deductible_met"],
+            coinsurance_pct=row["coinsurance_pct"], copay=row["copay"],
+            oop_max=row["oop_max"], oop_met=row["oop_met"],
+            payer_name=row["payer_name"], label=row["label"],
+        )
+        annual_premium = row["monthly_premium"] * 12
+
+        predicted_priced = [_priced(s, row["qhp_plan_id"]) for s in resolved_services]
+        possible_priced = predicted_priced + [_priced(s, row["qhp_plan_id"]) for s in possible_extra]
+
+        predicted = simulate_annual_scenario("predicted", plan, annual_premium, predicted_priced)
+        possible = simulate_annual_scenario("possible", plan, annual_premium, possible_priced)
+        worst_case = worst_case_scenario(plan, annual_premium)
+
+        plan_results.append({
+            "plan_id": row["id"],
+            "label": row["label"] or f"Plan {row['id']}",
+            "payer_name": row["payer_name"],
+            "is_current": row["id"] == current_plan_id,
+            "qhp_plan_id": row["qhp_plan_id"],
+            "monthly_premium": row["monthly_premium"],
+            "premium_provided": row["monthly_premium"] > 0,
+            "key_details": {
+                "deductible": row["deductible"],
+                "deductible_remaining": plan.remaining_deductible,
+                "oop_max": row["oop_max"] or None,
+                "oop_remaining": plan.remaining_oop if row["oop_max"] > 0 else None,
+                "coinsurance_pct": row["coinsurance_pct"] or None,
+                "copay": row["copay"],
+                "cost_sharing_source": "per_service" if row["qhp_plan_id"] else "blended",
+            },
+            "scenarios": {
+                "predicted": predicted.as_dict(),
+                "possible": possible.as_dict(),
+                "worst_case": worst_case.as_dict(),
+            },
+        })
+
+    plan_results.sort(key=lambda p: p["scenarios"]["predicted"]["annual_total"])
+
+    current = next((p for p in plan_results if p["is_current"]), None)
+    recommendation = None
+    if current is not None and plan_results[0]["plan_id"] != current["plan_id"]:
+        best = plan_results[0]
+        recommendation = {
+            "recommended_plan_id": best["plan_id"],
+            "recommended_label": best["label"],
+            "current_plan_id": current["plan_id"],
+            "current_label": current["label"],
+            "estimated_annual_savings": {
+                scenario: round(
+                    current["scenarios"][scenario]["annual_total"]
+                    - best["scenarios"][scenario]["annual_total"], 2,
+                )
+                for scenario in ("predicted", "possible", "worst_case")
+            },
+            "reason": (
+                f"{best['label']} has the lower predicted annual cost: "
+                f"${best['scenarios']['predicted']['annual_total']:,.2f} vs "
+                f"${current['scenarios']['predicted']['annual_total']:,.2f} on {current['label']}."
+            ),
+        }
+
+    return {
+        "household_size": household_size,
+        "plans": plan_results,
+        "unresolved_services": unresolved,
+        "recommendation": recommendation,
+    }
+
+
+@app.post("/api/plan-comparison")
+def plan_comparison(
+    body: PlanComparisonIn,
+    conn: sqlite3.Connection = Depends(get_conn),
+    catalog: sqlite3.Connection = Depends(get_catalog_conn),
+    user_id: int = Depends(require_user),
+):
+    return _run_plan_comparison(
+        conn, catalog, user_id, body.services, body.household_size, body.current_plan_id,
+    )
+
+
 class BillCheckIn(BaseModel):
     """A line from a bill or an explanation of benefits."""
 
@@ -2033,6 +2566,7 @@ class BillCheckIn(BaseModel):
 def check_bill(
     body: BillCheckIn,
     conn: sqlite3.Connection = Depends(get_conn),
+    catalog: sqlite3.Connection = Depends(get_catalog_conn),
     user_id: int = Depends(require_user),
 ):
     """Compare one line of a bill against what the hospital published.
@@ -2060,7 +2594,7 @@ def check_bill(
     if body.amount <= 0:
         raise HTTPException(status_code=422, detail="enter the amount from your bill")
 
-    resolution = retrieval.resolve_code(conn, body.query)
+    resolution = retrieval.resolve_code(catalog, body.query)
     if not resolution.code or not resolution.confident:
         return {
             "resolved": None,
@@ -2072,7 +2606,7 @@ def check_bill(
             ),
         }
 
-    ref = retrieval.billed_reference(conn, resolution.code, body.hospital_id)
+    ref = retrieval.billed_reference(catalog, resolution.code, body.hospital_id)
     if not ref:
         return {
             "resolved": {"code": resolution.code},
@@ -2082,7 +2616,7 @@ def check_bill(
 
     hospital = None
     if body.hospital_id is not None:
-        row = conn.execute(
+        row = catalog.execute(
             "SELECT name FROM hospital WHERE id = ?", (body.hospital_id,)
         ).fetchone()
         hospital = row["name"] if row else None
@@ -2094,7 +2628,7 @@ def check_bill(
     elif kind == "paid":
         plan = _load_plan(conn, user_id)
         share, share_status = retrieval.cost_share_status(
-            conn, _qhp_plan_id(conn, user_id), resolution.code
+            conn, catalog, _qhp_plan_id(conn, user_id), resolution.code
         )
         est = estimate(
             ref["median"], plan, low_allowed=ref["low"], high_allowed=ref["high"],
@@ -2213,17 +2747,40 @@ class AppointmentIn(BaseModel):
 
 @app.get("/api/appointments")
 def list_appointments(
-    conn: sqlite3.Connection = Depends(get_conn), user_id: int = Depends(require_user)
+    conn: sqlite3.Connection = Depends(get_conn),
+    catalog: sqlite3.Connection = Depends(get_catalog_conn),
+    user_id: int = Depends(require_user),
 ):
-    """Soonest first, with anything undated last."""
+    """Soonest first, with anything undated last.
+
+    `appointment` lives in the member's state database; `hospital` lives in the
+    knowledge catalog — two different SQLite files, so the join happens in
+    Python rather than SQL.
+    """
     rows = conn.execute(
-        """SELECT a.*, h.name AS hospital, h.address, h.source_page_url
-           FROM appointment a LEFT JOIN hospital h ON h.id = a.hospital_id
-           WHERE a.user_id IS ?
-           ORDER BY a.booked_for IS NULL, a.booked_for, a.id""",
+        """SELECT * FROM appointment WHERE user_id IS ?
+           ORDER BY booked_for IS NULL, booked_for, id""",
         (user_id,),
     ).fetchall()
-    return {"appointments": [dict(r) for r in rows]}
+    hospital_ids = {r["hospital_id"] for r in rows if r["hospital_id"] is not None}
+    hospitals = {}
+    if hospital_ids:
+        placeholders = ",".join("?" for _ in hospital_ids)
+        hospitals = {
+            h["id"]: h for h in catalog.execute(
+                f"SELECT id, name, address, source_page_url FROM hospital WHERE id IN ({placeholders})",
+                tuple(hospital_ids),
+            ).fetchall()
+        }
+    out = []
+    for r in rows:
+        row = dict(r)
+        h = hospitals.get(r["hospital_id"])
+        row["hospital"] = h["name"] if h else None
+        row["address"] = h["address"] if h else None
+        row["source_page_url"] = h["source_page_url"] if h else None
+        out.append(row)
+    return {"appointments": out}
 
 
 @app.post("/api/appointments")
@@ -2262,21 +2819,22 @@ def delete_appointment(
 
 
 @app.get("/api/search")
-def search(q: str, limit: int = 10, conn: sqlite3.Connection = Depends(get_conn)):
-    return {"query": q, "results": retrieval.search(conn, q, limit=limit)}
+def search(q: str, limit: int = 10, catalog: sqlite3.Connection = Depends(get_catalog_conn)):
+    return {"query": q, "results": retrieval.search(catalog, q, limit=limit)}
 
 
 @app.get("/api/providers")
 def providers(
     code: str,
     conn: sqlite3.Connection = Depends(get_conn),
+    catalog: sqlite3.Connection = Depends(get_catalog_conn),
     user_id: int | None = Depends(optional_user),
 ):
     """Facilities that publish a price for this code, cheapest first."""
-    prices = retrieval.prices_for_code(conn, code)
+    prices = retrieval.prices_for_code(catalog, code)
     plan = _load_plan(conn, user_id)
     cost_share, share_status = retrieval.cost_share_status(
-        conn, _qhp_plan_id(conn, user_id), code
+        conn, catalog, _qhp_plan_id(conn, user_id), code
     )
     out = []
     for p in prices:

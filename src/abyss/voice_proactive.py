@@ -16,7 +16,7 @@ def _care_name(journey: dict[str, Any]) -> str:
             value = fact.get("value")
             if isinstance(value, str) and value.strip():
                 return value.strip()
-    return "your care request"
+    return "care"
 
 
 def proactive_voice_prompt(journey: dict[str, Any] | None) -> str:

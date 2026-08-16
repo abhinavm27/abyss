@@ -82,10 +82,12 @@ class CareJourney:
 
     def refresh_onboarding_requirements(self) -> None:
         """Recompute intake gaps after facts arrive from chat or a confirmed source."""
+        # service_date and coverage_end_date are captured when volunteered but
+        # not required to advance intake — see the matching note in
+        # agents.py's OnboardingAgent.extract for why neither actually gates
+        # pricing.
         required = {
             "requested_procedure": "What care or procedure are you trying to arrange?",
-            "service_date": "What date do you expect to receive this care?",
-            "coverage_end_date": "When does your current coverage end?",
         }
         missing = [name for name in required if name not in self.workflow.care_state.facts]
         questions = [required[name] for name in missing]
@@ -230,7 +232,7 @@ class CareJourney:
             raise RuntimeError("chat care options can only be prepared from intake")
         if self.onboarding_missing:
             raise RuntimeError("complete the required intake facts before comparison")
-        required = {"requested_procedure", "procedure_code", "service_date", "coverage_end_date"}
+        required = {"requested_procedure", "procedure_code"}
         missing = sorted(required - self.workflow.care_state.facts.keys())
         if missing:
             raise RuntimeError(f"complete the required intake facts: {', '.join(missing)}")
