@@ -346,16 +346,16 @@ def _voice_journey_snapshot(conn, user_id: int, requested_journey_id: str | None
     """Load the requested journey, otherwise the member's newest active one."""
     if requested_journey_id:
         row = conn.execute(
-            "SELECT payload_json FROM care_journey WHERE journey_id=? AND user_id=?",
+            "SELECT snapshot_json FROM care_journey WHERE journey_id=? AND user_id=?",
             (requested_journey_id, user_id),
         ).fetchone()
         if row:
             try:
-                return json.loads(row["payload_json"])
+                return json.loads(row["snapshot_json"])
             except (json.JSONDecodeError, TypeError):
                 return None
     row = conn.execute(
-        """SELECT payload_json FROM care_journey
+        """SELECT snapshot_json FROM care_journey
            WHERE user_id=? AND status='active'
            ORDER BY updated_at DESC LIMIT 1""",
         (user_id,),
@@ -363,7 +363,7 @@ def _voice_journey_snapshot(conn, user_id: int, requested_journey_id: str | None
     if not row:
         return None
     try:
-        return json.loads(row["payload_json"])
+        return json.loads(row["snapshot_json"])
     except (json.JSONDecodeError, TypeError):
         return None
 
