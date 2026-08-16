@@ -1,12 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { VelaExperience } from "@/vela/VelaExperience";
 import { api, getToken } from "@/lib/api";
+import { AdminDashboard } from "@/pages/AdminDashboard";
 import "@/vela/vela.css";
 
 export default function App() {
   const liveConfigured = import.meta.env.VITE_LIVE_MODE === "true";
   const [authenticated, setAuthenticated] = useState(() => Boolean(getToken()));
-  if (!liveConfigured || authenticated) return <VelaExperience />;
+  const [admin, setAdmin] = useState(() => window.location.hash === "#admin");
+  useEffect(() => {
+    const onHash = () => setAdmin(window.location.hash === "#admin");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  if (!liveConfigured || authenticated) {
+    if (admin) return <AdminDashboard onBack={() => { window.location.hash = ""; setAdmin(false); }} />;
+    return <VelaExperience />;
+  }
   return <VelaAuth onAuthenticated={() => setAuthenticated(true)} />;
 }
 

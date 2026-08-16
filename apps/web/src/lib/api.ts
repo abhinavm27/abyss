@@ -456,6 +456,29 @@ export interface CareAgentResponse {
   context: CareContext;
 }
 
+export interface AgentSessionTurn {
+  utterance_id: string;
+  correlation_id: string;
+  journey_id: string | null;
+  intent: string;
+  message: string;
+  channel: "chat" | "voice";
+  status: "completed" | "failed";
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+  plan: CareAgentPlan | { validation_error: string };
+}
+
+export interface AgentSession {
+  correlation_id: string;
+  channel: "chat" | "voice";
+  status: "completed" | "failed";
+  started_at: string;
+  updated_at: string;
+  turns: AgentSessionTurn[];
+}
+
 /** A question that has already been asked, offered again on the home screen. */
 export interface RecentLookup {
   query: string;
@@ -646,6 +669,8 @@ export const api = {
     req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}`),
 
   adminJourneys: () => req<{ journeys: CareJourneySnapshot[] }>("/api/admin/journeys"),
+  adminAgentSessions: () => req<{ sessions: AgentSession[] }>("/api/admin/agent-sessions"),
+  clearDemoData: () => req<{ cleared: Record<string, number> }>("/api/admin/demo-data", { method: "DELETE" }),
 
   journeyOnboard: (journeyId: string, text: string, source = "user_request") =>
     req<CareJourneySnapshot>(`/api/journeys/${encodeURIComponent(journeyId)}/onboard`, {

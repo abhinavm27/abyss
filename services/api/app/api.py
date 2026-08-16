@@ -159,6 +159,7 @@ class CareAgentMessageIn(BaseModel):
     active_journey_id: str | None = None
     utterance_id: str | None = Field(default=None, max_length=200)
     correlation_id: str | None = Field(default=None, max_length=200)
+    channel: str = Field(default="chat", pattern="^(chat|voice)$")
 
 
 class JourneyRescheduleIn(BaseModel):
@@ -584,13 +585,16 @@ def care_agent_message(
     user_id: int = Depends(require_user),
 ):
     context = _user_care_context(conn, user_id)
+    utterance_id = body.utterance_id or f"utterance-{uuid.uuid4().hex[:12]}"
+    correlation_id = body.correlation_id or f"correlation-{uuid.uuid4().hex[:12]}"
+    plan = None
     try:
         plan = _care_journey_agent.plan(
             body.text,
             context=context,
             active_journey_id=body.active_journey_id,
-            utterance_id=body.utterance_id,
-            correlation_id=body.correlation_id,
+            utterance_id=utterance_id,
+            correlation_id=correlation_id,
         )
         journey = _owned_journey(plan.target_journey_id, user_id)
         reply: str
@@ -675,30 +679,69 @@ def care_agent_message(
         else:
             reply = "Are you starting new care, continuing a journey, checking status, or rescheduling an appointment?"
     except HermesError as exc:
+        _persist_care_agent_trace(
+            conn, user_id=user_id, body=body, utterance_id=utterance_id,
+            correlation_id=correlation_id, plan=plan, status="failed", error=str(exc),
+        )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
+        _persist_care_agent_trace(
+            conn, user_id=user_id, body=body, utterance_id=utterance_id,
+            correlation_id=correlation_id, plan=plan, status="failed", error=str(exc),
+        )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     conn.commit()
     journey_payload = _journey_payload(journey) if journey else None
     conn.commit()
     refreshed_context = _user_care_context(conn, user_id)
-    conn.execute(
-        """INSERT INTO care_agent_trace
-           (correlation_id,utterance_id,user_id,journey_id,intent,plan_json,message,created_at)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        (plan.correlation_id, plan.utterance_id, user_id,
-         journey.journey_id if journey else plan.target_journey_id,
-         plan.intent.value, json.dumps(plan.as_dict(), separators=(",", ":")),
-         body.text, datetime.now(timezone.utc).isoformat()),
+    _persist_care_agent_trace(
+        conn, user_id=user_id, body=body, utterance_id=plan.utterance_id,
+        correlation_id=plan.correlation_id, plan=plan, status="completed",
+        journey_id=journey.journey_id if journey else plan.target_journey_id,
     )
-    conn.commit()
     return {
         "reply": reply,
         "plan": plan.as_dict(),
         "journey": journey_payload,
         "context": refreshed_context,
     }
+
+
+def _persist_care_agent_trace(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    body: CareAgentMessageIn,
+    utterance_id: str,
+    correlation_id: str,
+    plan,
+    status: str,
+    error: str | None = None,
+    journey_id: str | None = None,
+) -> None:
+    """Store one durable row per utterance; correlation groups a session."""
+    now = datetime.now(timezone.utc).isoformat()
+    resolved_journey = journey_id or (plan.target_journey_id if plan else None)
+    intent = plan.intent.value if plan else "error"
+    plan_json = json.dumps(
+        plan.as_dict() if plan else {"validation_error": error or "unknown"},
+        separators=(",", ":"),
+    )
+    conn.execute(
+        """INSERT INTO care_agent_trace
+           (utterance_id,correlation_id,user_id,journey_id,intent,plan_json,message,
+            channel,status,error,created_at,completed_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(utterance_id) DO UPDATE SET
+             journey_id=excluded.journey_id, intent=excluded.intent,
+             plan_json=excluded.plan_json, message=excluded.message,
+             channel=excluded.channel, status=excluded.status,
+             error=excluded.error, completed_at=excluded.completed_at""",
+        (utterance_id, correlation_id, user_id, resolved_journey, intent,
+         plan_json, body.text, body.channel, status, error, now, now),
+    )
+    conn.commit()
 
 
 def _voice_care_turn(
@@ -718,6 +761,7 @@ def _voice_care_turn(
                 active_journey_id=active_journey_id,
                 utterance_id=utterance_id,
                 correlation_id=correlation_id,
+                channel="voice",
             ),
             conn=conn,
             user_id=user_id,
@@ -749,9 +793,72 @@ def get_journey(
 
 
 @app.get("/api/admin/journeys")
-def admin_journeys(user_id: int = Depends(require_user)):
+def admin_journeys(
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
     """Synthetic operations view for the hackathon admin console."""
-    return {"journeys": [_journey_payload(journey) for journey in _journeys.values()]}
+    live = {
+        journey.journey_id: _journey_payload(journey)
+        for journey in _journeys.values() if _journey_user_id(journey) == user_id
+    }
+    rows = conn.execute(
+        """SELECT journey_id,snapshot_json FROM care_journey
+           WHERE user_id=? ORDER BY updated_at DESC""",
+        (user_id,),
+    ).fetchall()
+    return {"journeys": [live.get(row["journey_id"]) or json.loads(row["snapshot_json"])
+                          for row in rows]}
+
+
+@app.get("/api/admin/agent-sessions")
+def admin_agent_sessions(
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
+    rows = conn.execute(
+        """SELECT utterance_id,correlation_id,journey_id,intent,plan_json,message,
+                  channel,status,error,created_at,completed_at
+           FROM care_agent_trace WHERE user_id=?
+           ORDER BY created_at DESC LIMIT 200""",
+        (user_id,),
+    ).fetchall()
+    sessions: dict[str, dict] = {}
+    for row in reversed(rows):
+        item = dict(row)
+        item["plan"] = json.loads(item.pop("plan_json"))
+        session = sessions.setdefault(item["correlation_id"], {
+            "correlation_id": item["correlation_id"], "channel": item["channel"],
+            "status": "completed", "started_at": item["created_at"],
+            "updated_at": item["completed_at"] or item["created_at"], "turns": [],
+        })
+        session["turns"].append(item)
+        session["updated_at"] = item["completed_at"] or item["created_at"]
+        if item["status"] == "failed":
+            session["status"] = "failed"
+    ordered = sorted(sessions.values(), key=lambda item: item["updated_at"], reverse=True)
+    return {"sessions": ordered}
+
+
+@app.delete("/api/admin/demo-data")
+def clear_demo_data(
+    conn: sqlite3.Connection = Depends(get_conn),
+    user_id: int = Depends(require_user),
+):
+    user = conn.execute("SELECT email FROM user WHERE id=?", (user_id,)).fetchone()
+    if user is None or not str(user["email"]).endswith("@example.test"):
+        raise HTTPException(status_code=403, detail="synthetic demo account required")
+    counts = {
+        table: conn.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id=?", (user_id,)).fetchone()[0]
+        for table in ("care_journey", "appointment", "care_agent_trace")
+    }
+    for table in ("appointment", "care_agent_trace", "care_journey"):
+        conn.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+    conn.commit()
+    for journey_id, journey in tuple(_journeys.items()):
+        if _journey_user_id(journey) == user_id:
+            _journeys.pop(journey_id, None)
+    return {"cleared": counts}
 
 
 @app.post("/api/journeys/{journey_id}/onboard")

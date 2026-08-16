@@ -338,6 +338,16 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
             setStatus("listening");
           }
           break;
+        case "turn_error":
+          // The server rejected one utterance safely (for example, malformed
+          // model JSON). Keep the authenticated voice session open so the user
+          // can repeat or clarify instead of starting over.
+          mutedRef.current = false;
+          turnInFlightRef.current = false;
+          setMicLevel(0);
+          setStatus("listening");
+          onError?.(String(msg.message ?? "That turn could not be processed. Please try again."));
+          break;
         case "error":
           setStatus("error");
           onError?.(String(msg.message ?? "voice session failed"));
