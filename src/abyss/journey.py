@@ -80,6 +80,29 @@ class CareJourney:
         self.memory.append(self.workflow.care_state.session_id, f"fact-{len(self.memory.records(self.workflow.care_state.session_id)) + 1}", fact)
         self.audit.append(self.journey_id, "fact_recorded", actor="journey", payload={"name": fact.name, "status": fact.verification_status.value})
 
+    def refresh_onboarding_requirements(self) -> None:
+        """Recompute intake gaps after facts arrive from chat or a confirmed source."""
+        required = {
+            "requested_procedure": "What care or procedure are you trying to arrange?",
+            "service_date": "What date do you expect to receive this care?",
+            "coverage_end_date": "When does your current coverage end?",
+        }
+        missing = [name for name in required if name not in self.workflow.care_state.facts]
+        questions = [required[name] for name in missing]
+        has_verified_code = "procedure_code" in self.workflow.care_state.facts
+        if (
+            not has_verified_code
+            and self.procedure_resolution is not None
+            and self.procedure_resolution.needs_confirmation
+        ):
+            procedure = self.workflow.care_state.facts.get("requested_procedure")
+            missing.append("procedure_code_confirmation")
+            questions.append(self.procedure_catalog.clarification_question(
+                str(procedure.value if procedure else ""), self.procedure_resolution
+            ))
+        self.onboarding_missing = tuple(missing)
+        self.onboarding_questions = tuple(questions)
+
     def onboard(self, text: str, *, source: str, prefer_explicit: bool = False):
         """Run bounded intake extraction and store candidate facts.
 
@@ -136,20 +159,7 @@ class CareJourney:
                 self.record_fact(DecisionFact("procedure_code", self.procedure_resolution.code,
                                                "procedure_catalog", procedure_fact.observed_at,
                                                1.0, VerificationStatus.VERIFIED))
-        required = {
-            "requested_procedure": "What care or procedure are you trying to arrange?",
-            "service_date": "What date do you expect to receive this care?",
-            "coverage_end_date": "When does your current coverage end?",
-        }
-        missing = [name for name in required if name not in self.workflow.care_state.facts]
-        questions = [required[name] for name in missing]
-        if self.procedure_resolution is not None and self.procedure_resolution.needs_confirmation:
-            missing.append("procedure_code_confirmation")
-            questions.append(self.procedure_catalog.clarification_question(
-                str(procedure or ""), self.procedure_resolution
-            ))
-        self.onboarding_missing = tuple(missing)
-        self.onboarding_questions = tuple(questions)
+        self.refresh_onboarding_requirements()
         self.audit.append(self.journey_id, "onboarding_completed", actor="onboarding_agent",
                           payload={"source": source, "fact_count": len(proposal.facts)})
         return proposal

@@ -462,6 +462,7 @@ def _attach_confirmed_report(analysis: ReportAnalysis, actor: object) -> dict:
             order_ids.append(confirmed.order.order_id)
             for fact in confirmed.facts:
                 journey.record_fact(fact)
+        journey.refresh_onboarding_requirements()
         options_ready = _prepare_chat_care_options(journey)
         journey.audit.append(
             journey.journey_id,
