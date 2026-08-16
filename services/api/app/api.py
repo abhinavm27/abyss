@@ -75,7 +75,7 @@ def _journey_dependencies() -> dict:
 
 @app.websocket("/ws")
 async def voice(ws: WebSocket):
-    await voice_endpoint(ws)
+    await voice_endpoint(ws, care_turn=_voice_care_turn)
 
 # The Vite dev server proxies /api, but Capacitor serves the built app from
 # capacitor://localhost, which is a distinct origin.
@@ -157,6 +157,8 @@ class JourneyBookingPreferencesIn(BaseModel):
 class CareAgentMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=10000)
     active_journey_id: str | None = None
+    utterance_id: str | None = Field(default=None, max_length=200)
+    correlation_id: str | None = Field(default=None, max_length=200)
 
 
 class JourneyRescheduleIn(BaseModel):
@@ -525,7 +527,11 @@ def care_agent_message(
     context = _user_care_context(conn, user_id)
     try:
         plan = _care_journey_agent.plan(
-            body.text, context=context, active_journey_id=body.active_journey_id
+            body.text,
+            context=context,
+            active_journey_id=body.active_journey_id,
+            utterance_id=body.utterance_id,
+            correlation_id=body.correlation_id,
         )
         journey = _owned_journey(plan.target_journey_id, user_id)
         reply: str
@@ -615,6 +621,31 @@ def care_agent_message(
         "journey": journey_payload,
         "context": refreshed_context,
     }
+
+
+def _voice_care_turn(
+    text: str,
+    active_journey_id: str | None,
+    user_id: int,
+    utterance_id: str,
+    correlation_id: str,
+) -> dict:
+    """Run a spoken turn through the exact same authenticated journey path."""
+    conn = db.connect()
+    db.init_db(conn)
+    try:
+        return care_agent_message(
+            CareAgentMessageIn(
+                text=text,
+                active_journey_id=active_journey_id,
+                utterance_id=utterance_id,
+                correlation_id=correlation_id,
+            ),
+            conn=conn,
+            user_id=user_id,
+        )
+    finally:
+        conn.close()
 
 
 @app.get("/api/journeys/{journey_id}")

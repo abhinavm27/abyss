@@ -3,7 +3,7 @@ import { getToken } from "@/lib/api";
 import { VOICE_WS_URL } from "@/lib/voiceConfig";
 
 /**
- * Voice session against the ABYSS backend's /ws Gemini Live bridge.
+ * Voice session against the ABYSS NVIDIA speech bridge.
  *
  * The audio path is temporarily kept as-is because
  * every part of it is there for a reason that cost real debugging: the worklet
@@ -41,14 +41,7 @@ interface Options {
   onError?: (message: string) => void;
 }
 
-/** Merge a streaming transcription fragment into the accumulated turn text.
- *
- * Gemini Live sends output transcription inconsistently —
- * sometimes cumulative, sometimes as deltas, sometimes re-sending an
- * overlapping tail. This collapses all three: a re-sent suffix is dropped, a
- * cumulative string replaces, a genuine delta is appended, and a partial
- * overlap is stitched at the seam (so "How can I help you today?" never
- * repeats). Exported for tests. */
+/** Merge transcription fragments without duplicating an already-rendered turn. */
 export function mergeTranscriptFragment(prevText: string, nextText: string): string {
   const a = prevText.trim();
   const b = nextText.trim();
@@ -98,6 +91,7 @@ class PCMProcessor extends AudioWorkletProcessor {
     this._prebuffer = [];
   }
   _postChunk(chunk) { this.port.postMessage(chunk.buffer, [chunk.buffer]); }
+  _postEvent(type) { this.port.postMessage({ type }); }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
     if (!ch) return true;
@@ -121,11 +115,13 @@ class PCMProcessor extends AudioWorkletProcessor {
           if (this._silenceFrames >= this._HANGOVER_FRAMES) {
             this._voiceActive = false;
             this._silenceFrames = 0;
+            this._postEvent('speech_end');
           }
         } else { this._silenceFrames = 0; }
       } else if (rms >= this._VOICE_RMS) {
         this._voiceActive = true;
         this._silenceFrames = 0;
+        this._postEvent('speech_start');
       }
       const int16 = new Int16Array(this._TARGET);
       for (let i = 0; i < this._TARGET; i++) {
@@ -168,7 +164,7 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
   const gainRef = useRef<GainNode | null>(null);
   const nextPlayRef = useRef(0);
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
-  const outRateRef = useRef(24000);
+  const outRateRef = useRef(22050);
   // While the assistant speaks, drop captured frames instead of sending them.
   const mutedRef = useRef(false);
   const unmuteTimerRef = useRef<number | null>(null);
@@ -294,6 +290,13 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
           }
           setStatus("ready");
           break;
+        case "listening":
+          setStatus("listening");
+          break;
+        case "processing":
+          if (msg.stage === "speaking") setStatus("speaking");
+          else setStatus("ready");
+          break;
         case "transcript":
           append(msg.role as "user" | "assistant", String(msg.text ?? ""));
           break;
@@ -356,8 +359,14 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
 
       const node = new AudioWorkletNode(ctx, "pcm-processor");
       workletRef.current = node;
-      node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+      node.port.onmessage = (e: MessageEvent<ArrayBuffer | { type: string }>) => {
         if (mutedRef.current || ws.readyState !== WebSocket.OPEN) return;
+        if (!(e.data instanceof ArrayBuffer)) {
+          if (e.data.type === "speech_start" || e.data.type === "speech_end") {
+            ws.send(JSON.stringify({ type: e.data.type }));
+          }
+          return;
+        }
         const pcm = new Int16Array(e.data);
         let peak = 0;
         for (let i = 0; i < pcm.length; i += 32) {
