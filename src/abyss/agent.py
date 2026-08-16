@@ -62,6 +62,21 @@ def _explicit_intake_fallback(
         elif "with contrast" in normalized:
             procedure += " with contrast"
         values.append(("requested_procedure", procedure))
+    elif "mri" in normalized:
+        values.append(("requested_procedure", "MRI"))
+    elif (
+        "ultrasound" in normalized
+        and not ("complete" in normalized and ("abdomen" in normalized or "abdominal" in normalized))
+    ):
+        values.append(("requested_procedure", "ultrasound"))
+    elif (
+        ("blood test" in normalized or "lab test" in normalized)
+        and not (
+            ("cbc" in normalized or "complete blood count" in normalized)
+            and ("differential" in normalized or " diff" in normalized)
+        )
+    ):
+        values.append(("requested_procedure", "blood test"))
 
     iso_dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)
     month_pattern = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?"

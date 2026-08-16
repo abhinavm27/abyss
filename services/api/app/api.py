@@ -679,6 +679,12 @@ def care_agent_message(
             if body.reply_to_pending else None
         )
         if plan is None:
+            plan = _care_journey_agent.explicit_new_care_plan(
+                body.text,
+                utterance_id=utterance_id,
+                correlation_id=correlation_id,
+            )
+        if plan is None:
             plan = _care_journey_agent.plan(
                 body.text,
                 context=context,
@@ -697,7 +703,11 @@ def care_agent_message(
                     name, value, "seeded_user_profile", now, 1.0,
                     VerificationStatus.SOURCE_BACKED,
                 ))
-            journey.onboard(body.text, source="care_journey_agent")
+            journey.onboard(
+                body.text,
+                source="care_journey_agent",
+                prefer_explicit=plan.source == "explicit_new_care_request",
+            )
             if _prepare_chat_care_options(journey):
                 reply = _care_options_reply(journey, voice=voice)
             else:

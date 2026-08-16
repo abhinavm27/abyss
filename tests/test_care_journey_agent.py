@@ -23,6 +23,27 @@ class SequencedPlanner:
 
 
 class CareJourneyAgentTests(unittest.TestCase):
+    def test_literal_mri_request_skips_slow_semantic_replanning(self) -> None:
+        plan = CareJourneyAgent.explicit_new_care_plan(
+            "Can you check an MRI appointment?",
+            utterance_id="utterance-mri",
+            correlation_id="correlation-mri",
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.intent, JourneyIntent.NEW_CARE_REQUEST)
+        self.assertEqual(plan.source, "explicit_new_care_request")
+
+    def test_existing_appointment_actions_still_require_model_routing(self) -> None:
+        for text in (
+            "Can you reschedule my MRI appointment?",
+            "What is the status of my MRI appointment?",
+        ):
+            self.assertIsNone(CareJourneyAgent.explicit_new_care_plan(
+                text,
+                utterance_id="utterance-existing",
+                correlation_id="correlation-existing",
+            ))
+
     def test_explicit_pending_reply_skips_semantic_replanning(self) -> None:
         context = {
             "journeys": [{

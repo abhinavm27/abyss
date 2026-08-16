@@ -2,7 +2,7 @@ import json
 import unittest
 from datetime import UTC, datetime
 
-from abyss.agent import AgentOutputError, explain, extract_facts
+from abyss.agent import AgentOutputError, explain, extract_explicit_facts, extract_facts
 
 
 class FakeHermes:
@@ -15,6 +15,15 @@ class FakeHermes:
 
 
 class AgentTests(unittest.TestCase):
+    def test_literal_bare_mri_is_available_to_fast_intake(self) -> None:
+        facts = extract_explicit_facts(
+            "Can you check an MRI appointment?", source="voice_transcript"
+        )
+        self.assertEqual(
+            [(fact.name, fact.value) for fact in facts],
+            [("requested_procedure", "MRI")],
+        )
+
     def test_evidence_is_supplied_as_authoritative_json(self):
         client = FakeHermes()
         reply = explain("What will I pay?", {"expected": 612}, client=client)

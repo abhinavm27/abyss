@@ -7,6 +7,7 @@ choose an insurance plan, calculate costs, grant consent, or execute actions.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
@@ -157,6 +158,48 @@ class CareJourneyAgent:
             return None
         facts = extract_explicit_facts(text, source="voice_transcript")
         return plan if facts else None
+
+    @staticmethod
+    def explicit_new_care_plan(
+        text: str,
+        *,
+        utterance_id: str,
+        correlation_id: str,
+    ) -> JourneyPlan | None:
+        """Skip semantic replanning for an unmistakable literal care request.
+
+        This only classifies transport intent. Onboarding records literal user
+        facts and the deterministic procedure catalog decides whether a code
+        can be resolved or a clarification is required. Existing-care actions
+        remain with Hermes because they require journey selection.
+        """
+        normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+        tokens = set(normalized.split())
+        care_terms = {"mri", "ultrasound", "xray", "ct", "blood", "cbc", "lab"}
+        request_terms = {
+            "appointment", "book", "schedule", "scan", "test", "care",
+            "check", "need", "want", "find", "arrange",
+        }
+        existing_action_terms = {
+            "reschedule", "move", "cancel", "status", "existing", "confirmed",
+        }
+        if not (tokens & care_terms and tokens & request_terms):
+            return None
+        if tokens & existing_action_terms or "my appointment" in normalized:
+            return None
+        return JourneyPlan(
+            intent=JourneyIntent.NEW_CARE_REQUEST,
+            correlation_id=correlation_id,
+            utterance_id=utterance_id,
+            target_journey_id=None,
+            target_appointment_id=None,
+            steps=("start_journey", "extract_literal_facts", "resolve_procedure"),
+            reuse=("member_profile", "current_plan"),
+            refresh=("procedure_resolution", "pending_fields"),
+            missing=(),
+            source="explicit_new_care_request",
+            confidence=1.0,
+        )
 
     def plan(
         self,
