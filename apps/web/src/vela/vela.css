@@ -237,7 +237,18 @@ button { color: inherit; }
 .vela-orb.is-active { animation: vela-breathe 2.6s ease-in-out infinite; }
 @keyframes vela-breathe { 50% { transform: scale(1.045); filter: drop-shadow(0 10px 33px rgba(64,190,226,.34)); } }
 
-.vela-status { margin: -2px 0 0; color: #243f6a; font-size: 15px; font-weight: 500; }
+.vela-status { display: inline-flex; align-items: center; gap: 8px; margin: -2px 0 0; color: #243f6a; font-size: 15px; font-weight: 500; }
+.vela-status i { width: 7px; height: 7px; border-radius: 50%; background: #4bc9e9; box-shadow: 0 0 0 5px rgba(75,201,233,.12); }
+.vela-status.is-transcribing i,
+.vela-status.is-reasoning i { background: #e7a344; box-shadow: 0 0 0 5px rgba(231,163,68,.13); animation: vela-processing-dot 1.15s ease-in-out infinite; }
+.vela-status.is-speaking i { background: #1a8ec6; animation: vela-processing-dot .8s ease-in-out infinite; }
+.vela-status.is-error i { background: #c85757; box-shadow: 0 0 0 5px rgba(200,87,87,.12); }
+@keyframes vela-processing-dot { 50% { transform: scale(1.5); opacity: .55; } }
+
+.vela-listener.is-transcribing .vela-wave i,
+.vela-listener.is-reasoning .vela-wave i { animation-play-state: paused; opacity: .16; }
+.vela-listener.is-transcribing .vela-orb,
+.vela-listener.is-reasoning .vela-orb { background: radial-gradient(circle, #fff 0 7%, #ffd88d 26%, rgba(236,172,70,.2) 49%, transparent 70%); filter: drop-shadow(0 8px 25px rgba(213,148,45,.18)); }
 
 .vela-start { margin-top: 30px; }
 .vela-start p { margin: 0 0 14px; color: #697894; font-size: 14px; }
@@ -254,6 +265,7 @@ button { color: inherit; }
   cursor: pointer;
 }
 .vela-start button svg { width: 17px; }
+.vela-start button:disabled { cursor: default; opacity: .78; box-shadow: none; }
 
 .vela-prompt { max-width: 520px; margin: 20px auto 14px; color: #60718e; font-size: 16px; line-height: 1.55; }
 

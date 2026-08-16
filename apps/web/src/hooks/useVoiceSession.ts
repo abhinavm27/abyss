@@ -15,7 +15,15 @@ import { VOICE_WS_URL } from "@/lib/voiceConfig";
  * and the model otherwise hears itself and interrupts.
  */
 
-export type VoiceStatus = "idle" | "connecting" | "ready" | "listening" | "speaking" | "error";
+export type VoiceStatus =
+  | "idle"
+  | "connecting"
+  | "ready"
+  | "listening"
+  | "transcribing"
+  | "reasoning"
+  | "speaking"
+  | "error";
 
 /** What each state is called in the interface. Lives here rather than in a
  *  screen because two places now show it: the composer inside Ask, and the
@@ -24,9 +32,11 @@ export const VOICE_LABEL: Record<VoiceStatus, string> = {
   idle: "Start talking",
   connecting: "Connecting…",
   // Distinct from "listening": the socket is up but the mic isn't capturing yet.
-  ready: "Getting the microphone ready…",
-  listening: "Listening",
-  speaking: "ABYSS is speaking",
+  ready: "Microphone ready",
+  listening: "Listening — pause when you're done",
+  transcribing: "Transcribing your request…",
+  reasoning: "Care Journey Agent is working…",
+  speaking: "VELA is responding…",
   error: "Voice unavailable",
 };
 
@@ -84,7 +94,9 @@ class PCMProcessor extends AudioWorkletProcessor {
     this._TARGET = 2048;
     this._VOICE_RMS = 0.015;
     this._SILENCE_RMS = 0.008;
-    this._HANGOVER_FRAMES = 10;
+    // Eight 128 ms chunks gives the speaker roughly one second to pause
+    // naturally before the turn is finalized.
+    this._HANGOVER_FRAMES = 8;
     this._PREBUFFER_FRAMES = 2;
     this._voiceActive = false;
     this._silenceFrames = 0;
@@ -167,6 +179,7 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
   const outRateRef = useRef(22050);
   // While the assistant speaks, drop captured frames instead of sending them.
   const mutedRef = useRef(false);
+  const turnInFlightRef = useRef(false);
   const unmuteTimerRef = useRef<number | null>(null);
 
   const append = useCallback((role: "user" | "assistant", text: string) => {
@@ -237,6 +250,7 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
     const msUntilDone = Math.max(0, (nextPlayRef.current - ctx.currentTime) * 1000) + 250;
     unmuteTimerRef.current = window.setTimeout(() => {
       mutedRef.current = false;
+      turnInFlightRef.current = false;
       setStatus((s) => (s === "speaking" ? "listening" : s));
     }, msUntilDone);
   }, []);
@@ -265,6 +279,7 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
     wsRef.current?.close();
     wsRef.current = null;
     mutedRef.current = false;
+    turnInFlightRef.current = false;
     setMicLevel(0);
     setStatus("idle");
   }, [stopPlayback]);
@@ -291,11 +306,12 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
           setStatus("ready");
           break;
         case "listening":
-          setStatus("listening");
+          if (!turnInFlightRef.current) setStatus("listening");
           break;
         case "processing":
-          if (msg.stage === "speaking") setStatus("speaking");
-          else setStatus("ready");
+          if (msg.stage === "transcribing") setStatus("transcribing");
+          else if (msg.stage === "reasoning") setStatus("reasoning");
+          else if (msg.stage === "speaking") setStatus("speaking");
           break;
         case "transcript":
           append(msg.role as "user" | "assistant", String(msg.text ?? ""));
@@ -309,8 +325,18 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
         case "interrupted":
           stopPlayback();
           mutedRef.current = false;
+          turnInFlightRef.current = false;
+          setStatus("listening");
           break;
         case "turn_complete":
+          // Magpie audio chunks are scheduled ahead of currentTime. Playback's
+          // completion timer reopens the microphone when audio exists; a
+          // text-only response can reopen it immediately.
+          if (sourcesRef.current.length === 0) {
+            mutedRef.current = false;
+            turnInFlightRef.current = false;
+            setStatus("listening");
+          }
           break;
         case "error":
           setStatus("error");
@@ -360,13 +386,24 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
       const node = new AudioWorkletNode(ctx, "pcm-processor");
       workletRef.current = node;
       node.port.onmessage = (e: MessageEvent<ArrayBuffer | { type: string }>) => {
-        if (mutedRef.current || ws.readyState !== WebSocket.OPEN) return;
+        if (ws.readyState !== WebSocket.OPEN) return;
         if (!(e.data instanceof ArrayBuffer)) {
-          if (e.data.type === "speech_start" || e.data.type === "speech_end") {
-            ws.send(JSON.stringify({ type: e.data.type }));
+          if (e.data.type === "speech_start" && !turnInFlightRef.current) {
+            ws.send(JSON.stringify({ type: "speech_start" }));
+            setStatus("listening");
+          } else if (e.data.type === "speech_end" && !turnInFlightRef.current) {
+            ws.send(JSON.stringify({ type: "speech_end" }));
+            // Finalize this turn immediately. The worklet may continue running,
+            // but no more microphone frames leave the browser until the
+            // backend response has completed.
+            turnInFlightRef.current = true;
+            mutedRef.current = true;
+            setMicLevel(0);
+            setStatus("transcribing");
           }
           return;
         }
+        if (mutedRef.current || turnInFlightRef.current) return;
         const pcm = new Int16Array(e.data);
         let peak = 0;
         for (let i = 0; i < pcm.length; i += 32) {
@@ -408,6 +445,8 @@ export function useVoiceSession({ onUiEvent, onError }: Options = {}) {
     connect,
     disconnect,
     sendText,
-    isActive: status === "listening" || status === "speaking" || status === "ready",
+    isActive: status !== "idle" && status !== "error",
+    isListening: status === "listening",
+    isProcessing: status === "transcribing" || status === "reasoning" || status === "speaking",
   };
 }
