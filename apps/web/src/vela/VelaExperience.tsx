@@ -1341,11 +1341,11 @@ export function VelaExperience() {
                 </button>
               </div>
             )}
-            {["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
+            {inputMode === "voice" && ["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
             {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
             {scene === "recommendation" && journey && <RecommendationCard journey={journey} onContinue={() => setTab("paths")} onExplain={() => void explainPaths()} />}
             {scene === "consent" && <ConsentCard copy={liveMode ? verificationCopy : demoConsentCopy} onApprove={liveMode ? verifySelectedPath : () => setScene("booking")} onBack={() => (liveMode ? setTab("paths") : setScene("recommendation"))} />}
-            {scene === "booking" && (
+            {inputMode === "voice" && scene === "booking" && (
               <section className="vela-booking-handoff">
                 <AgentPanel activeCount={4} />
                 <button className="vela-primary" onClick={() => setTab("appointments")}>
