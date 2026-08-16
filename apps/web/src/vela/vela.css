@@ -266,6 +266,17 @@ button { color: inherit; }
 }
 .vela-start button svg { width: 17px; }
 .vela-start button:disabled { cursor: default; opacity: .78; box-shadow: none; }
+.vela-stop-voice { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 9px 14px; border: 1px solid rgba(155,53,53,.18); border-radius: 100px; color: #9c4141; background: rgba(255,248,246,.78); box-shadow: 0 7px 20px rgba(94,39,39,.07); font-size: 11px; font-weight: 650; cursor: pointer; backdrop-filter: blur(10px); }
+.vela-stop-voice:hover { border-color: rgba(155,53,53,.34); background: #fff8f5; transform: translateY(-1px); }
+.vela-stop-voice svg { width: 12px; fill: currentColor; }
+
+.vela-voice-choice-backdrop { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 22px; background: rgba(7,30,55,.28); backdrop-filter: blur(14px); }
+.vela-voice-choice { position: relative; width: min(510px,100%); padding: 30px; border: 1px solid rgba(27,75,108,.12); border-radius: 25px; color: #173b5d; background: linear-gradient(145deg,rgba(255,255,252,.98),rgba(239,248,249,.97)); box-shadow: 0 35px 90px rgba(10,40,69,.25); animation: vela-message-in .3s ease both; }
+.vela-voice-choice-kicker { display: flex; align-items: center; gap: 7px; color: #1780ba; font-size: 9px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }.vela-voice-choice-kicker svg { width: 14px; }
+.vela-voice-choice h2 { max-width: 410px; margin: 12px 0 9px; font: 400 31px/1.08 var(--vela-serif); }.vela-voice-choice > p { max-width: 430px; margin: 0; color: #687b8e; font-size: 11px; line-height: 1.6; }
+.vela-voice-choice article { display: grid; gap: 8px; margin: 21px 0 18px; padding: 16px; border: 1px solid rgba(26,116,168,.13); border-radius: 15px; background: rgba(255,255,255,.72); }.vela-voice-choice article > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; }.vela-voice-choice article span { padding: 4px 7px; border-radius: 100px; color: #1878b2; background: #e8f4f7; font-size: 8px; font-weight: 700; text-transform: uppercase; }.vela-voice-choice article b { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.vela-voice-choice article small { color: #718394; font-size: 9px; line-height: 1.45; }
+.vela-voice-choice-actions { display: grid; grid-template-columns: 1.25fr 1fr; gap: 9px; }.vela-voice-choice-actions button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 13px; border: 1px solid rgba(28,78,112,.14); border-radius: 11px; color: #31516d; background: rgba(255,255,255,.72); font-size: 10px; font-weight: 700; cursor: pointer; }.vela-voice-choice-actions button:first-child { border-color: transparent; color: #fff; background: linear-gradient(135deg,#1b84cf,#1469b4); box-shadow: 0 9px 22px rgba(19,105,177,.18); }.vela-voice-choice-actions svg { width: 14px; }.vela-voice-choice-actions button:disabled { cursor: wait; opacity: .55; }
+.vela-voice-choice-close { position: absolute; top: 15px; right: 15px; display: grid; place-items: center; width: 31px; height: 31px; border: 0; border-radius: 50%; color: #66798b; background: rgba(229,237,239,.8); cursor: pointer; }.vela-voice-choice-close svg { width: 14px; }
 
 .vela-prompt { max-width: 520px; margin: 20px auto 14px; color: #60718e; font-size: 16px; line-height: 1.55; }
 

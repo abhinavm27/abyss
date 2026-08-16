@@ -1,10 +1,11 @@
-import { Building2, CalendarDays, Camera, Check, CircleEllipsis, FileText, Home, LockKeyhole, Menu, MessageCircle, Mic, Network, Phone, Send, Settings, ShieldCheck, Sparkles, Upload, WalletCards, X } from "lucide-react";
+import { Building2, CalendarDays, Camera, Check, CircleEllipsis, FileText, History, Home, LockKeyhole, Menu, MessageCircle, Mic, Network, Phone, Plus, Send, Settings, ShieldCheck, Sparkles, Square, Upload, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, getToken, type CardScan, type CareAgentResponse, type CareContext, type CareJourneySnapshot } from "@/lib/api";
+import { api, getToken, type CardScan, type CareAgentResponse, type CareContext, type CareContextJourney, type CareJourneySnapshot } from "@/lib/api";
 import { VOICE_LABEL, useVoiceSession } from "@/hooks/useVoiceSession";
 import { captureCard, extractCardText } from "@/lib/cardScan";
 import { SECURE_APP_URL } from "@/lib/voiceConfig";
 import { voiceStartErrorMessage } from "@/lib/voiceErrors";
+import { latestUnfinishedJourney } from "@/lib/voiceJourney";
 import { NeuralPath } from "@/vela/NeuralPath";
 import { AppointmentsTab, DocumentsTab, PathsTab, PreferencesTab, type ReferralIntakeReview, type VelaAppointment, type VelaDocument, type VelaDocumentKind } from "@/vela/VelaTabs";
 
@@ -556,6 +557,34 @@ function InsuranceScanReview({ scan, onClose }: { scan: CardScan; onClose: () =>
   );
 }
 
+function VoiceJourneyChoice({ journey, busy, onContinue, onNew, onClose }: {
+  journey: CareContextJourney;
+  busy: boolean;
+  onContinue: () => void;
+  onNew: () => void;
+  onClose: () => void;
+}) {
+  const pending = journey.pending_questions[0];
+  return (
+    <div className="vela-voice-choice-backdrop">
+      <section className="vela-voice-choice" role="dialog" aria-modal="true" aria-labelledby="voice-choice-title">
+        <button className="vela-voice-choice-close" type="button" onClick={onClose} aria-label="Close voice journey choice"><X /></button>
+        <span className="vela-voice-choice-kicker"><History /> Unfinished journey found</span>
+        <h2 id="voice-choice-title">Where should this voice session begin?</h2>
+        <p>Continue where you left off, or open a separate journey without changing the existing one.</p>
+        <article>
+          <div><span>{journey.stage}</span><b>{journey.title}</b></div>
+          <small>{pending || "Your saved facts and progress are ready."}</small>
+        </article>
+        <div className="vela-voice-choice-actions">
+          <button type="button" disabled={busy} onClick={onContinue}><History /> Continue this journey</button>
+          <button type="button" disabled={busy} onClick={onNew}><Plus /> Start a new journey</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function VelaExperience() {
   const mobile = useIsMobile();
   const liveMode = import.meta.env.VITE_LIVE_MODE === "true" && Boolean(getToken());
@@ -578,6 +607,7 @@ export function VelaExperience() {
   const [chatStarted, setChatStarted] = useState(false);
   const [chatVisualProgress, setChatVisualProgress] = useState(0);
   const [voiceStarted, setVoiceStarted] = useState(false);
+  const [voiceJourneyChoice, setVoiceJourneyChoice] = useState<CareContextJourney | null>(null);
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([
     {
       role: "assistant",
@@ -659,7 +689,7 @@ export function VelaExperience() {
   const resolved = ["recommendation", "consent", "booking", "complete"].includes(scene);
   const voiceLevel = inputMode === "chat" && chatBusy ? 0.72 : liveMode ? voice.micLevel : demoMic.level;
   const voiceFeedback = liveMode ? (voice.status === "listening" && voiceLevel > 0.08 ? "I can hear you…" : VOICE_LABEL[voice.status]) : voiceLevel > 0.08 ? "I can hear you…" : liveCopy.status;
-  const voiceButtonLabel = liveMode ? (voice.isListening ? "Listening now" : voice.isProcessing ? VOICE_LABEL[voice.status] : voice.isActive ? VOICE_LABEL[voice.status] : "Start a care request") : demoMic.active ? "Listening now" : "Start a care request";
+  const voiceButtonLabel = liveMode ? (voice.isListening ? "Listening now" : voice.isProcessing ? VOICE_LABEL[voice.status] : voice.isActive ? VOICE_LABEL[voice.status] : "Start voice") : demoMic.active ? "Listening now" : "Start voice";
   const agentCount = useMemo(() => {
     if (scene === "working") return 2;
     if (["decision", "verifying"].includes(scene)) return 3;
@@ -768,6 +798,7 @@ export function VelaExperience() {
     setChatStarted(false);
     setChatVisualProgress(0);
     setVoiceStarted(false);
+    setVoiceJourneyChoice(null);
     setTab("home");
     setChatTurns([
       {
@@ -777,26 +808,22 @@ export function VelaExperience() {
     ]);
   };
 
-  const begin = async () => {
-    if (inputMode === "chat") return;
-    let journeyId = journey?.journey_id;
+  const connectVoiceJourney = async (choice: "continue" | "new", resumable?: CareContextJourney) => {
+    setVoiceJourneyChoice(null);
+    setBusy(true);
     try {
-      if (liveMode) {
-        if (!journeyId) {
-          setBusy(true);
-          setNotice("Starting a new care journey…");
-          const started = await api.startJourney({ empty: true });
-          journeyId = started.journey_id;
-          adoptJourney(started);
-          setNotice(null);
-        }
-        await voice.connect(journeyId);
+      let target: CareJourneySnapshot;
+      if (choice === "continue" && resumable) {
+        setNotice("Restoring your unfinished journey before voice starts…");
+        target = await api.journey(resumable.journey_id);
+      } else {
+        setNotice("Starting a new care journey…");
+        target = await api.startJourney({ empty: true });
       }
-      else {
-        await demoMic.start();
-        setScene("documents");
-      }
+      adoptJourney(target);
+      await voice.connect(target.journey_id);
       setVoiceStarted(true);
+      setNotice(null);
     } catch (error) {
       setNotice(voiceStartErrorMessage(error, {
         isSecureContext: window.isSecureContext,
@@ -807,6 +834,47 @@ export function VelaExperience() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const begin = async () => {
+    if (inputMode === "chat") return;
+    if (!liveMode) {
+      try {
+        await demoMic.start();
+        setScene("documents");
+        setVoiceStarted(true);
+      } catch (error) {
+        setNotice(voiceStartErrorMessage(error, {
+          isSecureContext: window.isSecureContext,
+          hasGetUserMedia: Boolean(navigator.mediaDevices?.getUserMedia),
+          secureAppUrl: SECURE_APP_URL,
+        }));
+      }
+      return;
+    }
+    setBusy(true);
+    try {
+      const context = await api.careContext();
+      setCareContext(context);
+      const unfinished = latestUnfinishedJourney(context.journeys);
+      if (unfinished) {
+        setVoiceJourneyChoice(unfinished);
+        return;
+      }
+      await connectVoiceJourney("new");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "VELA could not check your care journeys.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopVoice = () => {
+    voice.disconnect();
+    demoMic.stop();
+    setVoiceStarted(false);
+    setScene("listening");
+    setNotice("Voice stopped. Your journey progress is saved.");
   };
 
   const sendChat = async (suggestedText?: string) => {
@@ -1255,14 +1323,19 @@ export function VelaExperience() {
                   <i aria-hidden />
                   {voiceFeedback}
                 </p>
+                {(liveMode ? voice.isActive : demoMic.active) && (
+                  <button className="vela-stop-voice" type="button" onClick={stopVoice}>
+                    <Square /> Stop voice
+                  </button>
+                )}
               </>
             )}
             {inputMode === "chat" && <ChatPanel turns={chatTurns} value={chatValue} busy={chatBusy} busyLabel={CHAT_PROGRESS[chatProgressIndex]} suggestions={chatSuggestions} onValue={setChatValue} onSend={() => void sendChat()} onSuggestion={(text) => void sendChat(text)} />}
 
-            {scene === "listening" && inputMode === "voice" && (
+            {inputMode === "voice" && !(liveMode ? voice.isActive : demoMic.active) && (
               <div className="vela-start">
-                <p>{liveMode && voice.isProcessing ? "Your turn is complete. The microphone is paused while VELA works." : "Tell VELA what care you need. A natural pause will end your turn automatically."}</p>
-                <button disabled={liveMode && voice.isActive} onClick={() => void begin()}>
+                <p>Start voice when you’re ready. If you have unfinished care, VELA will ask whether to continue it or begin separately.</p>
+                <button disabled={busy} onClick={() => void begin()}>
                   <Mic />
                   {voiceButtonLabel}
                 </button>
@@ -1284,6 +1357,15 @@ export function VelaExperience() {
           </div>
           <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleInsuranceFiles([file]))} onUpload={handleInsuranceFiles} />
           {insuranceScan && <InsuranceScanReview scan={insuranceScan} onClose={() => setInsuranceScan(null)} />}
+          {voiceJourneyChoice && (
+            <VoiceJourneyChoice
+              journey={voiceJourneyChoice}
+              busy={busy}
+              onContinue={() => void connectVoiceJourney("continue", voiceJourneyChoice)}
+              onNew={() => void connectVoiceJourney("new")}
+              onClose={() => setVoiceJourneyChoice(null)}
+            />
+          )}
           {notice && (
             <div className="vela-notice">
               <span>{notice}</span>
