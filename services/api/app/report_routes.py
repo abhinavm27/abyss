@@ -49,17 +49,24 @@ def _media_type(file: UploadFile) -> str:
         return "text/plain"
     if name.endswith(".pdf") or file.content_type == "application/pdf":
         return "application/pdf"
-    raise ReportIntakeError("upload a PDF or UTF-8 text doctor report")
+    if (file.content_type or "").startswith("image/"):
+        return file.content_type or "image/jpeg"
+    raise ReportIntakeError("upload a PDF, UTF-8 text, or image doctor report")
 
 
-def _extract_pages(payload: bytes, media_type: str) -> tuple[ExtractedPage, ...]:
+def _extract_pages(
+    payload: bytes,
+    media_type: str,
+    *,
+    extracted_text: str | None = None,
+) -> tuple[ExtractedPage, ...]:
     if media_type == "text/plain":
         try:
             text = payload.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ReportIntakeError("the text report must be UTF-8") from error
         pages = (ExtractedPage(1, text),) if text.strip() else ()
-    else:
+    elif media_type == "application/pdf":
         import pdfplumber
 
         try:
@@ -71,6 +78,9 @@ def _extract_pages(payload: bytes, media_type: str) -> tuple[ExtractedPage, ...]
                 )
         except Exception as error:  # noqa: BLE001 - exposed as a safe client error
             raise ReportIntakeError("text could not be extracted from this PDF") from error
+    else:
+        text = (extracted_text or "").strip()
+        pages = (ExtractedPage(1, text),) if text else ()
     if not pages:
         raise ReportIntakeError("the uploaded report contains no readable text")
     if sum(len(page.text) for page in pages) > MAX_EXTRACTED_CHARACTERS:
@@ -121,6 +131,7 @@ def build_report_intake_router(
         consent_scope: str = Form(...),
         consent_approved: bool = Form(...),
         journey_id: str | None = Form(default=None),
+        extracted_text: str | None = Form(default=None),
         actor: Any = Depends(actor_dependency),  # noqa: B008
     ):
         try:
@@ -137,7 +148,11 @@ def build_report_intake_router(
                 actor=str(actor),
             )
             # Consent is validated above before PDF/text extraction begins.
-            pages = _extract_pages(payload, document.media_type)
+            pages = _extract_pages(
+                payload,
+                document.media_type,
+                extracted_text=extracted_text,
+            )
             return service.analyze_authorized(
                 authorization,
                 pages,

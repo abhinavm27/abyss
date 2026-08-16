@@ -124,6 +124,25 @@ class ReportIntakeRouteTests(unittest.TestCase):
         self.assertEqual(analyzed.status_code, 200, analyzed.text)
         self.assertFalse(analyzed.json()["raw_document_persisted"])
 
+    def test_camera_image_is_hash_bound_before_browser_ocr_is_processed(self) -> None:
+        upload = {"file": ("synthetic-referral.jpg", b"synthetic-image", "image/jpeg")}
+        prepared = self.client.post("/api/report-intake/prepare", files=upload)
+        self.assertEqual(prepared.status_code, 200, prepared.text)
+        self.assertEqual(self.extractor_calls, [])
+
+        analyzed = self.client.post(
+            "/api/report-intake/analyze",
+            files=upload,
+            data={
+                "consent_scope": prepared.json()["consent_scope"],
+                "consent_approved": "true",
+                "extracted_text": self.report,
+            },
+        )
+        self.assertEqual(analyzed.status_code, 200, analyzed.text)
+        self.assertEqual(len(self.extractor_calls), 1)
+        self.assertEqual(self.extractor_calls[0][0].text, self.report)
+
 
 if __name__ == "__main__":
     unittest.main()

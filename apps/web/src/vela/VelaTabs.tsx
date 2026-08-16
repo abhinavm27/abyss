@@ -1,4 +1,4 @@
-import { Bell, Building2, CalendarDays, Check, ChevronRight, CircleDollarSign, Clock3, CreditCard, Download, FileCheck2, FileText, HeartHandshake, Languages, MapPin, Network, Plus, ReceiptText, ScanLine, ShieldCheck, Stethoscope, Trash2, Upload, X } from "lucide-react";
+import { Bell, Building2, CalendarDays, Camera, Check, ChevronRight, CircleDollarSign, Clock3, CreditCard, Download, FileCheck2, FileText, HeartHandshake, Languages, MapPin, Network, Plus, ReceiptText, ScanLine, ShieldCheck, Stethoscope, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type CareContext, type CareJourneySnapshot, type MemberMemory, type MessagingPreference, type NotificationPreview, type PreparedReportDocument, type ReportAnalysis } from "@/lib/api";
 
@@ -541,12 +541,13 @@ function ReportIntakePanel({ review, busy, onAnalyze, onToggleOrder, onConfirm, 
   );
 }
 
-export function DocumentsTab({ documents, onDocuments, busy, referralReview, onUploadDocument, onAnalyzeReferral, onToggleReferralOrder, onConfirmReferral, onCloseReferral }: {
+export function DocumentsTab({ documents, onDocuments, busy, referralReview, onUploadDocument, onCaptureReferral, onAnalyzeReferral, onToggleReferralOrder, onConfirmReferral, onCloseReferral }: {
   documents: VelaDocument[];
   onDocuments: (items: VelaDocument[]) => void;
   busy: boolean;
   referralReview: ReferralIntakeReview | null;
   onUploadDocument: (kind: VelaDocumentKind, file: File) => Promise<void>;
+  onCaptureReferral: () => void;
   onAnalyzeReferral: () => void;
   onToggleReferralOrder: (orderId: string) => void;
   onConfirmReferral: () => void;
@@ -571,6 +572,11 @@ export function DocumentsTab({ documents, onDocuments, busy, referralReview, onU
                 <span><b>{choice.title}</b><small>{choice.detail}</small></span>
                 <Upload aria-hidden />
               </button>
+              {choice.kind === "Referral/order" && (
+                <button className="vela-document-camera" type="button" disabled={busy} onClick={onCaptureReferral}>
+                  <Camera aria-hidden /> Scan with camera
+                </button>
+              )}
               <input
                 ref={(element) => { inputRefs.current[choice.kind] = element; }}
                 hidden

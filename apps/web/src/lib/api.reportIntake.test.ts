@@ -46,6 +46,23 @@ describe("report-intake API contract", () => {
     expect(body.get("journey_id")).toBe("journey-1");
   });
 
+  it("sends browser OCR only after approval for a camera image", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok({ analysis_id: "analysis-2", orders: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.analyzeReportIntake(
+      new File(["synthetic image"], "order.jpg", { type: "image/jpeg" }),
+      "process doctor report sha256:image",
+      undefined,
+      "Abdominal ultrasound, complete.",
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = init.body as FormData;
+    expect(body.get("extracted_text")).toBe("Abdominal ultrasound, complete.");
+    expect(body.get("consent_approved")).toBe("true");
+  });
+
   it("confirms only the explicitly selected candidate IDs", async () => {
     const fetchMock = vi.fn().mockResolvedValue(ok({ options_ready: false, journey: {} }));
     vi.stubGlobal("fetch", fetchMock);

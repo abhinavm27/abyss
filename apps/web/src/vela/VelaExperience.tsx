@@ -606,6 +606,7 @@ export function VelaExperience() {
   );
   const [referralReview, setReferralReview] = useState<ReferralIntakeReview | null>(null);
   const referralFileRef = useRef<File | null>(null);
+  const referralOcrRef = useRef<string | null>(null);
   const [appointments, setAppointments] = useState<VelaAppointment[]>(
     liveMode
       ? []
@@ -862,12 +863,13 @@ export function VelaExperience() {
     setDocuments((items) => items.map((item) => item.id === documentId ? { ...item, status } : item));
   };
 
-  const prepareReferral = async (file: File) => {
+  const prepareReferral = async (file: File, extractedText?: string) => {
     const documentId = addDocument(file, "Referral/order");
     setBusy(true);
     setNotice("Preparing the referral without analyzing its contents…");
     setReferralReview(null);
     referralFileRef.current = file;
+    referralOcrRef.current = extractedText || null;
     try {
       if (!liveMode) {
         setDocuments((items) => items.map((item) => item.id === documentId ? { ...item, status: "Review needed" } : item));
@@ -889,6 +891,7 @@ export function VelaExperience() {
     } catch (error) {
       updateDocumentStatus(documentId, "Review needed");
       referralFileRef.current = null;
+      referralOcrRef.current = null;
       setNotice(error instanceof Error ? error.message : "VELA could not prepare that referral.");
     } finally {
       setBusy(false);
@@ -906,6 +909,7 @@ export function VelaExperience() {
         file,
         referralReview.prepared.consent_scope,
         journey?.stage === "intake" ? journey.journey_id : undefined,
+        referralOcrRef.current || undefined,
       );
       setReferralReview((current) => current ? {
         ...current,
@@ -949,6 +953,7 @@ export function VelaExperience() {
       updateDocumentStatus(referralReview.documentId, "Verified");
       setReferralReview((current) => current ? { ...current, analysis: result.analysis, phase: "confirmed", error: null } : current);
       referralFileRef.current = null;
+      referralOcrRef.current = null;
       const reply = result.options_ready
         ? `Your confirmed order is now part of this journey. I found ${result.journey.current_plan_options.length} current-plan hospital options.`
         : `Your confirmed order is now part of this journey. ${result.journey.onboarding_questions.join(" ")}`;
@@ -958,6 +963,25 @@ export function VelaExperience() {
       const message = error instanceof Error ? error.message : "VELA could not confirm those orders.";
       setReferralReview((current) => current ? { ...current, phase: "review", error: message } : current);
       setNotice(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const captureReferral = async () => {
+    const file = await captureCard();
+    if (!file) return;
+    setBusy(true);
+    setNotice("Reading the photographed referral on this device…");
+    try {
+      const extractedText = await extractCardText(file);
+      if (!extractedText.trim()) {
+        setNotice("No readable referral text was found. Retake the photo in good light.");
+        return;
+      }
+      await prepareReferral(file, extractedText);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "VELA could not read that referral photo.");
     } finally {
       setBusy(false);
     }
@@ -1280,12 +1304,14 @@ export function VelaExperience() {
               busy={busy}
               referralReview={referralReview}
               onUploadDocument={handleDocumentUpload}
+              onCaptureReferral={() => void captureReferral()}
               onAnalyzeReferral={() => void analyzeReferral()}
               onToggleReferralOrder={toggleReferralOrder}
               onConfirmReferral={() => void confirmReferralOrders()}
               onCloseReferral={() => {
                 setReferralReview(null);
                 referralFileRef.current = null;
+                referralOcrRef.current = null;
               }}
             />
           )}

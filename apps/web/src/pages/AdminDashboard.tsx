@@ -10,6 +10,9 @@ const label: Record<string, string> = {
   stage_advanced: "Journey State Transition",
   fact_recorded: "Fact Ledger ← Agent / User",
   sandbox_receipt: "Sandbox Adapter → Receipt Ledger",
+  report_orders_confirmed: "Document Agent → Verified Fact Ledger",
+  message_previewed: "Messaging Agent → Consent Preview",
+  message_sent: "Messaging Adapter → Delivery Receipt",
 };
 
 const tone: Record<string, string> = {
@@ -18,6 +21,9 @@ const tone: Record<string, string> = {
   evaluation_completed: "admin-node--lime",
   consent_recorded: "admin-node--violet",
   sandbox_receipt: "admin-node--green",
+  report_orders_confirmed: "admin-node--cyan",
+  message_previewed: "admin-node--violet",
+  message_sent: "admin-node--green",
 };
 
 export function AdminDashboard({ onBack }: { onBack: () => void }) {
@@ -59,7 +65,7 @@ export function AdminDashboard({ onBack }: { onBack: () => void }) {
   }, []);
 
   const events = useMemo(() => selected?.events ?? [], [selected]);
-  const agentEvents = events.filter((event) => event.type.includes("onboarding") || event.type.includes("matching") || event.type.includes("evaluation") || event.type.includes("receipt"));
+  const agentEvents = events.filter((event) => ["onboarding", "matching", "evaluation", "receipt", "report", "message"].some((name) => event.type.includes(name)));
   const stageIndex = ["intake", "compare", "recommend", "enroll", "transition", "verify", "book", "complete"];
   const failedTurns = sessions.reduce((sum, session) => sum + session.turns.filter((turn) => turn.status === "failed").length, 0);
 
