@@ -1,4 +1,6 @@
-const API = `http://${location.hostname}:8011`;
+// Same-origin keeps API and WebSocket requests valid when the demo is served
+// over HTTPS. Vite proxies both paths to the private backend.
+const API = "";
 const DEMO = { email: "demo@example.test", password: "demo-password-123" };
 let journey = null;
 let careContext = { journeys: [], appointments: [], scheduled_tasks: [] };
@@ -8,6 +10,9 @@ const el = (id) => document.getElementById(id);
 const messages = el("messages");
 const input = el("input");
 const status = el("status");
+const voiceButton = el("voice");
+const voiceLabel = el("voice-label");
+const voiceStatus = el("voice-status");
 const money = (value) => Number(value).toLocaleString("en-US", { style: "currency", currency: "USD" });
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (char) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -248,6 +253,208 @@ async function pollBookingTask() {
     }
   }
 }
+
+const VOICE_WORKLET = `
+class ChatLabPCMProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.inputRate = sampleRate; this.outputRate = 16000;
+    this.ratio = this.inputRate / this.outputRate; this.phase = 0; this.prev = 0;
+    this.samples = []; this.target = 2048; this.active = false; this.silence = 0;
+    this.prebuffer = []; this.muted = false;
+    this.port.onmessage = (event) => { this.muted = Boolean(event.data && event.data.muted); };
+  }
+  chunk(value) { this.port.postMessage(value.buffer, [value.buffer]); }
+  event(type) { this.port.postMessage({ type }); }
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0];
+    if (!channel) return true;
+    for (let i = 0; i < channel.length; i += 1) {
+      const current = channel[i];
+      while (this.phase < 1) {
+        this.samples.push(this.prev + (current - this.prev) * this.phase);
+        this.phase += this.ratio;
+      }
+      this.phase -= 1; this.prev = current;
+    }
+    while (this.samples.length >= this.target) {
+      const values = this.samples.splice(0, this.target);
+      if (this.muted) { this.active = false; this.silence = 0; this.prebuffer = []; continue; }
+      let sum = 0;
+      for (let i = 0; i < values.length; i += 1) sum += values[i] * values[i];
+      const rms = Math.sqrt(sum / values.length);
+      let ended = false;
+      if (this.active) {
+        if (rms < 0.008) {
+          this.silence += 1;
+          if (this.silence >= 10) {
+            this.active = false; this.silence = 0; ended = true; this.event('speech_end');
+          }
+        } else this.silence = 0;
+      } else if (rms >= 0.015) {
+        this.active = true; this.silence = 0; this.event('speech_start');
+      }
+      const pcm = new Int16Array(values.length);
+      for (let i = 0; i < values.length; i += 1) {
+        const sample = Math.max(-1, Math.min(1, values[i]));
+        pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+      }
+      if (this.active) {
+        while (this.prebuffer.length) this.chunk(this.prebuffer.shift());
+        this.chunk(pcm);
+      } else if (!ended) {
+        this.prebuffer.push(pcm);
+        while (this.prebuffer.length > 2) this.prebuffer.shift();
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('chatlab-pcm', ChatLabPCMProcessor);
+`;
+
+let voiceSocket = null;
+let voiceStream = null;
+let voiceContext = null;
+let voiceWorklet = null;
+let playbackContext = null;
+let nextPlaybackAt = 0;
+let voiceOutputRate = 22050;
+let voiceSpeaking = false;
+
+function voiceState(label, active = true, meter = false) {
+  voiceButton.classList.toggle("active", active);
+  voiceButton.setAttribute("aria-pressed", String(active));
+  voiceLabel.textContent = active ? "Stop voice" : "Start voice";
+  voiceStatus.innerHTML = `${meter ? '<span class="voice-meter" aria-hidden="true"><i></i><i></i><i></i></span>' : ""}<span>${escapeHtml(label)}</span>`;
+}
+
+function bytesToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let value = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    value += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(value);
+}
+
+function playVoiceChunk(encoded) {
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const sampleCount = Math.floor(bytes.byteLength / 2);
+  if (!sampleCount) return;
+  if (!playbackContext || playbackContext.state === "closed") {
+    playbackContext = new AudioContext({ sampleRate: voiceOutputRate });
+    nextPlaybackAt = 0;
+  }
+  const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, sampleCount);
+  const buffer = playbackContext.createBuffer(1, pcm.length, voiceOutputRate);
+  const output = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i += 1) output[i] = pcm[i] / 32768;
+  const source = playbackContext.createBufferSource();
+  source.buffer = buffer;
+  const gain = playbackContext.createGain(); gain.gain.value = 1.5;
+  source.connect(gain).connect(playbackContext.destination);
+  const startsAt = Math.max(playbackContext.currentTime, nextPlaybackAt);
+  nextPlaybackAt = startsAt + buffer.duration;
+  source.start(startsAt);
+  voiceSpeaking = true;
+  voiceWorklet?.port.postMessage({ muted: true });
+  voiceState("ABYSS is speaking", true, true);
+}
+
+function stopVoice() {
+  voiceSocket?.close(); voiceSocket = null;
+  voiceWorklet?.disconnect(); voiceWorklet = null;
+  voiceStream?.getTracks().forEach((track) => track.stop()); voiceStream = null;
+  void voiceContext?.close().catch(() => {}); voiceContext = null;
+  void playbackContext?.close().catch(() => {}); playbackContext = null;
+  nextPlaybackAt = 0; voiceSpeaking = false;
+  voiceState("Voice uses NVIDIA Parakeet, Nemotron, and Magpie.", false);
+}
+
+async function startVoice() {
+  const token = localStorage.getItem("abyss.token");
+  if (!token) throw new Error("Sign in as the synthetic demo user first.");
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Microphone access requires the HTTPS Chat Lab URL.");
+  }
+  voiceState("Connecting NVIDIA speech services…", true, true);
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+  voiceSocket = socket;
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "ready") {
+      voiceOutputRate = Number(message.output_sample_rate) || 22050;
+      voiceState("Listening — speak naturally, then pause.", true, true);
+    } else if (message.type === "listening") {
+      voiceState("Listening…", true, true);
+    } else if (message.type === "processing") {
+      const labels = { transcribing: "Parakeet is transcribing…", reasoning: "Journey Agent is reasoning…", speaking: "Magpie is preparing speech…" };
+      voiceState(labels[message.stage] || "Working…", true, true);
+    } else if (message.type === "transcript") {
+      addMessage(message.text, message.role === "user" ? "user" : "assistant");
+    } else if (message.type === "audio") {
+      playVoiceChunk(message.data);
+    } else if (message.type === "ui" && message.target === "care_journey") {
+      const result = message.payload;
+      lastAgentPlan = result.plan;
+      careContext = result.context;
+      if (result.journey) journey = result.journey;
+      render();
+    } else if (message.type === "turn_complete") {
+      const waitMs = playbackContext ? Math.max(0, (nextPlaybackAt - playbackContext.currentTime) * 1000) + 200 : 0;
+      window.setTimeout(() => {
+        if (voiceSocket !== socket) return;
+        voiceSpeaking = false;
+        voiceWorklet?.port.postMessage({ muted: false });
+        voiceState("Listening — speak naturally, then pause.", true, true);
+      }, waitMs);
+    } else if (message.type === "error") {
+      status.className = "error";
+      status.textContent = `Voice error: ${message.message}`;
+      stopVoice();
+    }
+  };
+  socket.onclose = () => { if (voiceSocket === socket) stopVoice(); };
+  socket.onerror = () => {
+    status.className = "error";
+    status.textContent = "Could not reach the NVIDIA voice gateway.";
+  };
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    window.setTimeout(() => reject(new Error("Voice connection timed out.")), 10000);
+  });
+  socket.send(JSON.stringify({ type: "auth", token }));
+  voiceStream = await navigator.mediaDevices.getUserMedia({ audio: {
+    echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+  }});
+  voiceContext = new AudioContext();
+  if (voiceContext.state === "suspended") await voiceContext.resume();
+  const url = URL.createObjectURL(new Blob([VOICE_WORKLET], { type: "application/javascript" }));
+  await voiceContext.audioWorklet.addModule(url); URL.revokeObjectURL(url);
+  voiceWorklet = new AudioWorkletNode(voiceContext, "chatlab-pcm");
+  voiceWorklet.port.onmessage = (event) => {
+    if (!voiceSocket || voiceSocket.readyState !== WebSocket.OPEN || voiceSpeaking) return;
+    if (event.data instanceof ArrayBuffer) {
+      voiceSocket.send(JSON.stringify({ type: "audio", data: bytesToBase64(event.data) }));
+    } else if (event.data?.type === "speech_start" || event.data?.type === "speech_end") {
+      voiceSocket.send(JSON.stringify({ type: event.data.type }));
+    }
+  };
+  voiceContext.createMediaStreamSource(voiceStream).connect(voiceWorklet);
+  const silent = voiceContext.createGain(); silent.gain.value = 0;
+  voiceWorklet.connect(silent).connect(voiceContext.destination);
+}
+
+voiceButton.onclick = () => {
+  if (voiceSocket) stopVoice();
+  else startVoice().catch((error) => {
+    stopVoice(); status.className = "error"; status.textContent = `Voice error: ${error.message}`;
+  });
+};
 
 el("login").onclick = () => run(async () => {
   const result = await request("/api/auth/login", { method: "POST", body: JSON.stringify(DEMO) });

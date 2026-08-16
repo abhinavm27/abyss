@@ -1,22 +1,24 @@
-"""WebSocket bridge between the browser and Gemini Live.
+"""Consent-safe NVIDIA speech bridge for the Care Journey Agent.
 
 Temporary compatibility protocol for the imported audio client:
 
     CLIENT -> SERVER (JSON text frames)
+      { "type": "speech_start" }
       { "type": "audio", "data": "<base64 PCM 16 kHz mono>" }
+      { "type": "speech_end" }
       { "type": "text",  "text": "how much is a knee MRI" }
 
     SERVER -> CLIENT (JSON text frames)
-      { "type": "ready", "output_sample_rate": 24000 }
+      { "type": "ready", "output_sample_rate": 22050 }
       { "type": "transcript", "role": "user"|"assistant", "text": "..." }
-      { "type": "audio", "data": "<base64 PCM 24 kHz mono>" }
-      { "type": "ui", "target": "estimate", "payload": { ...PriceResponse } }
+      { "type": "audio", "data": "<base64 PCM 22.05 kHz mono>" }
+      { "type": "ui", "target": "care_journey", "payload": { ... } }
       { "type": "turn_complete" }
       { "type": "error", "message": "..." }
 
-The system prompt lives here, on the server. The client sends speech and lookup
-keys, never instructions. This prevents
-a compromised or modified client cannot talk the model out of its guardrails.
+Parakeet performs ASR, the existing Care Journey Agent routes the transcript
+through Hermes/Nemotron and deterministic rules, and Magpie speaks only the
+grounded response returned by that path.
 """
 
 from __future__ import annotations
@@ -25,103 +27,18 @@ import asyncio
 import base64
 import json
 import logging
+import uuid
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
-from google import genai
-from google.genai import types
 
 from . import auth, db, retrieval
 from .ingest import qhp
-from .config import LIVE_MODEL, OUTPUT_SAMPLE_RATE, SYSTEM_PROMPT, gemini_api_key
 from .estimator import Plan, estimate
+from .nvidia_speech import NvidiaSpeechClient, NvidiaSpeechError
 
 log = logging.getLogger(__name__)
-
-LOOKUP_PRICE = types.FunctionDeclaration(
-    name="lookup_price",
-    description=(
-        "Look up what a medical procedure costs at loaded hospitals, adjusted for "
-        "the user's insurance plan. The only source of price information."
-    ),
-    parameters=types.Schema(
-        type="OBJECT",
-        properties={
-            "procedure": types.Schema(
-                type="STRING",
-                description=(
-                    "What the user asked for, in their own words — e.g. 'MRI of my knee' "
-                    "or 'code 1664'. Billing codes read off a bill are handled here too."
-                ),
-            ),
-            "code": types.Schema(
-                type="STRING",
-                description=(
-                    "An exact billing code to price. Use this to confirm one of the "
-                    "candidates returned by an earlier ambiguous lookup."
-                ),
-            ),
-        },
-        required=["procedure"],
-    ),
-)
-
-GET_MY_PLAN = types.FunctionDeclaration(
-    name="get_my_plan",
-    description=(
-        "Look up the member's own insurance plan: deductible, how much of it they "
-        "have met, out-of-pocket maximum, and what the plan charges for a given "
-        "kind of care. Use this for any question about their coverage rather than "
-        "a specific procedure's price."
-    ),
-    parameters=types.Schema(
-        type="OBJECT",
-        properties={
-            "category": types.Schema(
-                type="STRING",
-                description=(
-                    "Optional. The kind of care they asked about, if any. One of: "
-                    + ", ".join(sorted(qhp.BENEFIT_CATEGORIES.values()))
-                ),
-            ),
-        },
-    ),
-)
-
-UPDATE_PLAN_USAGE = types.FunctionDeclaration(
-    name="update_plan_usage",
-    description=(
-        "Record how much the member has now paid toward their deductible or "
-        "out-of-pocket maximum this year. Use when they mention paying a bill or "
-        "correct a figure — 'I paid another $200 last week', 'my deductible is "
-        "actually at $1,500'. Only use amounts they state."
-    ),
-    parameters=types.Schema(
-        type="OBJECT",
-        properties={
-            "deductible_met": types.Schema(
-                type="NUMBER",
-                description="New total paid toward the deductible this year, in dollars.",
-            ),
-            "oop_met": types.Schema(
-                type="NUMBER",
-                description="New total paid out of pocket this year, in dollars.",
-            ),
-            "add": types.Schema(
-                type="BOOLEAN",
-                description=(
-                    "True when the amounts are an addition to what is already "
-                    "recorded ('another $200'), false when they replace it "
-                    "('it's at $1,500'). Defaults to false."
-                ),
-            ),
-        },
-    ),
-)
-
-TOOLS = [
-    types.Tool(function_declarations=[LOOKUP_PRICE, GET_MY_PLAN, UPDATE_PLAN_USAGE])
-]
-
 
 def _plan_row(conn, user_id: int | None):
     return conn.execute(
@@ -421,21 +338,51 @@ def run_update_plan_usage(
     )
 
 
-async def voice_endpoint(ws: WebSocket) -> None:
+CareTurn = Callable[[str, str | None, int, str, str], dict[str, Any]]
+
+
+async def _stream_magpie(
+    ws: WebSocket,
+    speech: NvidiaSpeechClient,
+    text: str,
+) -> None:
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[bytes | Exception | None] = asyncio.Queue()
+
+    def produce() -> None:
+        try:
+            speech.stream_speech(
+                text,
+                lambda chunk: loop.call_soon_threadsafe(queue.put_nowait, chunk),
+            )
+        except Exception as error:
+            loop.call_soon_threadsafe(queue.put_nowait, error)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    worker = asyncio.create_task(asyncio.to_thread(produce))
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        await ws.send_json({"type": "audio", "data": base64.b64encode(item).decode()})
+    await worker
+
+
+async def voice_endpoint(
+    ws: WebSocket,
+    *,
+    care_turn: CareTurn,
+    speech: NvidiaSpeechClient | None = None,
+) -> None:
+    """Bridge half-duplex audio turns into the same journey path as typed chat."""
     await ws.accept()
-
-    api_key = gemini_api_key()
-    if not api_key:
-        await ws.send_json({"type": "error", "message": "GEMINI_API_KEY is not configured"})
-        await ws.close()
-        return
-
+    speech = speech or NvidiaSpeechClient()
     conn = db.connect()
     db.init_db(conn)
 
-    # The session token arrives as the first message rather than as a query
-    # parameter: a token in the URL ends up in access logs and browser history,
-    # and a WebSocket handshake cannot carry an Authorization header.
     user_id: int | None = None
     try:
         first = json.loads(await ws.receive_text())
@@ -449,142 +396,111 @@ async def voice_endpoint(ws: WebSocket) -> None:
         conn.close()
         return
 
-    client = genai.Client(api_key=api_key)
-    config = types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        input_audio_transcription=types.AudioTranscriptionConfig(),
-        output_audio_transcription=types.AudioTranscriptionConfig(),
-        system_instruction=SYSTEM_PROMPT,
-        tools=TOOLS,
-    )
+    health = await asyncio.to_thread(speech.health)
+    if not all(health.values()):
+        await ws.send_json({
+            "type": "error",
+            "message": "NVIDIA speech services are not ready",
+            "services": health,
+        })
+        await ws.close()
+        conn.close()
+        return
+
+    session_id = f"voice-{uuid.uuid4().hex[:12]}"
+    correlation_id = f"correlation-{uuid.uuid4().hex[:12]}"
+    active_journey_id: str | None = None
+    utterance_id: str | None = None
+    pcm = bytearray()
+    max_pcm_bytes = speech.config.input_sample_rate * 2 * 45
+
+    async def process_turn(text: str, turn_id: str) -> None:
+        nonlocal active_journey_id
+        normalized = text.strip()
+        if not normalized:
+            await ws.send_json({"type": "turn_complete"})
+            return
+        await ws.send_json({
+            "type": "transcript", "role": "user", "text": normalized,
+            "utterance_id": turn_id, "session_id": session_id,
+        })
+        await ws.send_json({"type": "processing", "stage": "reasoning"})
+        result = await asyncio.to_thread(
+            care_turn,
+            normalized,
+            active_journey_id,
+            user_id,
+            turn_id,
+            correlation_id,
+        )
+        journey = result.get("journey")
+        if isinstance(journey, dict) and journey.get("journey_id"):
+            active_journey_id = str(journey["journey_id"])
+        await ws.send_json({"type": "ui", "target": "care_journey", "payload": result})
+        reply = str(result.get("reply") or "I could not determine the next journey step.")
+        await ws.send_json({
+            "type": "transcript", "role": "assistant", "text": reply,
+            "utterance_id": turn_id, "session_id": session_id,
+        })
+        await ws.send_json({"type": "processing", "stage": "speaking"})
+        await _stream_magpie(ws, speech, reply)
+        await ws.send_json({"type": "turn_complete"})
 
     try:
-        async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
-            await ws.send_json({"type": "ready", "output_sample_rate": OUTPUT_SAMPLE_RATE})
-
-            async def pump_client_to_model() -> None:
-                while True:
-                    raw = await ws.receive_text()
-                    try:
-                        msg = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-
-                    kind = msg.get("type")
-                    if kind == "audio" and msg.get("data"):
-                        await session.send_realtime_input(
-                            audio=types.Blob(
-                                data=base64.b64decode(msg["data"]),
-                                mime_type="audio/pcm;rate=16000",
-                            )
-                        )
-                    elif kind == "text" and msg.get("text"):
-                        await session.send_client_content(
-                            turns=types.Content(
-                                role="user", parts=[types.Part(text=msg["text"])]
-                            )
-                        )
-
-            async def pump_model_to_client() -> None:
-                # `session.receive()` ends at each turn boundary, so it is
-                # re-entered for the life of the socket. Without the outer loop
-                # the session closes after a single question.
-                while True:
-                    await _one_turn()
-
-            async def _one_turn() -> None:
-                async for message in session.receive():
-                    if message.tool_call:
-                        responses = []
-                        for fc in message.tool_call.function_calls:
-                            args = dict(fc.args or {})
-                            if fc.name == "lookup_price":
-                                result, payload = await asyncio.to_thread(
-                                    run_lookup_price,
-                                    conn,
-                                    args.get("procedure", ""),
-                                    args.get("code"),
-                                    user_id,
-                                )
-                                # Render the card while the model is still
-                                # speaking — a generative-UI pattern.
-                                await ws.send_json(
-                                    {"type": "ui", "target": "estimate", "payload": payload}
-                                )
-                            elif fc.name == "update_plan_usage":
-                                result, payload = await asyncio.to_thread(
-                                    run_update_plan_usage,
-                                    conn,
-                                    args.get("deductible_met"),
-                                    args.get("oop_met"),
-                                    bool(args.get("add", False)),
-                                    user_id,
-                                )
-                                await ws.send_json(
-                                    {"type": "ui", "target": "plan", "payload": payload}
-                                )
-                            elif fc.name == "get_my_plan":
-                                result, payload = await asyncio.to_thread(
-                                    run_get_my_plan, conn, args.get("category"), user_id
-                                )
-                                await ws.send_json(
-                                    {"type": "ui", "target": "plan", "payload": payload}
-                                )
-                            else:
-                                result = {"error": f"unknown tool {fc.name}"}
-
-                            responses.append(
-                                types.FunctionResponse(id=fc.id, name=fc.name, response=result)
-                            )
-                        await session.send_tool_response(function_responses=responses)
-                        continue
-
-                    sc = message.server_content
-                    if not sc:
-                        continue
-
-                    if sc.input_transcription and sc.input_transcription.text:
-                        await ws.send_json({
-                            "type": "transcript",
-                            "role": "user",
-                            "text": sc.input_transcription.text,
-                        })
-                    if sc.output_transcription and sc.output_transcription.text:
-                        await ws.send_json({
-                            "type": "transcript",
-                            "role": "assistant",
-                            "text": sc.output_transcription.text,
-                        })
-                    if sc.model_turn:
-                        for part in sc.model_turn.parts:
-                            if part.inline_data and part.inline_data.data:
-                                await ws.send_json({
-                                    "type": "audio",
-                                    "data": base64.b64encode(part.inline_data.data).decode(),
-                                })
-                    if sc.interrupted:
-                        await ws.send_json({"type": "interrupted"})
-                    if sc.turn_complete:
-                        await ws.send_json({"type": "turn_complete"})
-
-            up = asyncio.create_task(pump_client_to_model())
-            down = asyncio.create_task(pump_model_to_client())
-            done, pending = await asyncio.wait(
-                {up, down}, return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
-            for task in done:
-                exc = task.exception()
-                if exc and not isinstance(exc, WebSocketDisconnect):
-                    raise exc
-
+        await ws.send_json({
+            "type": "ready",
+            "provider": "nvidia",
+            "asr_model": "parakeet-1.1b-ctc-en-us",
+            "reasoning_model": "hermes-nemotron",
+            "tts_model": "magpie-tts-multilingual",
+            "input_sample_rate": speech.config.input_sample_rate,
+            "output_sample_rate": speech.config.output_sample_rate,
+            "session_id": session_id,
+        })
+        while True:
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            kind = msg.get("type")
+            if kind == "speech_start":
+                pcm.clear()
+                utterance_id = f"utterance-{uuid.uuid4().hex[:12]}"
+                await ws.send_json({"type": "listening", "utterance_id": utterance_id})
+            elif kind == "audio" and msg.get("data"):
+                try:
+                    chunk = base64.b64decode(msg["data"], validate=True)
+                except (ValueError, TypeError):
+                    continue
+                if len(pcm) + len(chunk) <= max_pcm_bytes:
+                    pcm.extend(chunk)
+            elif kind == "speech_end":
+                turn_id = utterance_id or f"utterance-{uuid.uuid4().hex[:12]}"
+                if len(pcm) < speech.config.input_sample_rate // 2:
+                    pcm.clear()
+                    await ws.send_json({"type": "turn_complete"})
+                    continue
+                await ws.send_json({"type": "processing", "stage": "transcribing"})
+                text = await asyncio.to_thread(speech.transcribe_pcm, bytes(pcm))
+                pcm.clear()
+                await process_turn(text, turn_id)
+            elif kind == "text" and msg.get("text"):
+                await process_turn(
+                    str(msg["text"]), f"utterance-{uuid.uuid4().hex[:12]}"
+                )
     except WebSocketDisconnect:
         pass
-    except Exception as exc:  # surface the reason instead of a silent close
+    except (NvidiaSpeechError, RuntimeError, ValueError) as exc:
+        log.exception("voice turn failed")
+        try:
+            await ws.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    except Exception:
         log.exception("voice session failed")
         try:
-            await ws.send_json({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            await ws.send_json({"type": "error", "message": "voice session failed"})
         except Exception:
             pass
     finally:
