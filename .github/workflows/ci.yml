@@ -18,6 +18,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Python dependencies
+        run: python3 -m pip install -e . -e services/api
+
       - name: Test deterministic engine and API workflow
         run: PYTHONPATH=src python3 -m unittest discover -s tests -v
 
