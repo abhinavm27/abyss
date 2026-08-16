@@ -22,29 +22,36 @@ flowchart LR
         NEMOCLAW["NemoClaw and OpenShell policy boundary"]
         HERMES["Authenticated Hermes gateway"]
         NEMOTRON["NVIDIA Nemotron local inference"]
-        INTAKE["Onboarding and document extraction agent"]
+        JOURNEY_AGENT["Care Journey Agent"]
+        ONBOARDING["Onboarding Agent"]
         VALIDATE["Closed schema validation and redaction"]
         MEMORY["Versioned fact and user memory ledger"]
         ENGINE["Care Journey Engine"]
+        KNOWLEDGE["Knowledge Agent"]
+        MATCHING["Matching Agent"]
+        BOOKING_AGENT["Booking Agent"]
         PLANS["Washington plan and benefit catalog"]
         PROVIDERS["Seattle provider, network, and price catalog"]
         RULES["Deterministic eligibility, network, cost, consent, and state rules"]
-        EXPLAIN["Grounded explanation agent"]
         AUDIT["Redacted audit and receipt ledger"]
 
         NEMOCLAW --> HERMES --> NEMOTRON
-        NEMOTRON --> INTAKE --> VALIDATE
+        NEMOTRON --> JOURNEY_AGENT
+        NEMOTRON --> ONBOARDING --> VALIDATE
         VALIDATE --> MEMORY
+        JOURNEY_AGENT -->|"validated plan"| ENGINE
         MEMORY --> ENGINE
-        PLANS --> ENGINE
-        PROVIDERS --> ENGINE
+        PLANS --> KNOWLEDGE --> ENGINE
+        PROVIDERS --> KNOWLEDGE
+        ENGINE --> MATCHING --> RULES
+        ENGINE --> BOOKING_AGENT
         ENGINE --> RULES
-        RULES --> EXPLAIN
         ENGINE --> AUDIT
     end
 
     subgraph EXECUTION["Consent controlled action boundary"]
         REVIEW["Ranked care paths, reasons, sources, and caveats"]
+        SLOT_SELECTION["User-selected provider, facility, date, and time"]
         CONSENT["Exact action and scope consent gate"]
         ENROLL["Sandbox enrollment adapter"]
         TRANSITION["Sandbox coverage transition adapter"]
@@ -55,7 +62,13 @@ flowchart LR
 
         REVIEW --> CONSENT
         CONSENT -->|"approved for exact scope"| ENROLL
-        ENROLL --> TRANSITION --> VERIFY --> BOOK --> RECEIPTS
+        CONSENT -->|"approved for exact scope"| TRANSITION
+        CONSENT -->|"approved for exact scope"| VERIFY
+        CONSENT -->|"approved for exact scope"| BOOK
+        ENROLL --> RECEIPTS
+        TRANSITION --> RECEIPTS
+        VERIFY --> RECEIPTS
+        BOOK --> RECEIPTS
         CONSENT -->|"missing, expired, or denied"| BLOCKED
         ENROLL -->|"failure"| BLOCKED
         TRANSITION -->|"failure"| BLOCKED
@@ -64,11 +77,72 @@ flowchart LR
     end
 
     VOICE --> HERMES
-    CARD --> INTAKE
-    FILES --> INTAKE
-    EXPLAIN --> REVIEW
+    CARD --> ONBOARDING
+    FILES --> ONBOARDING
+    RULES --> REVIEW
+    KNOWLEDGE --> REVIEW
+    BOOKING_AGENT --> SLOT_SELECTION --> CONSENT
     RECEIPTS --> AUDIT
     BLOCKED --> AUDIT
+```
+
+## Agent topology and contracts
+
+VELA uses bounded agents around one deterministic authority. The agents classify,
+extract, request, and explain; the Care Journey Engine validates their outputs,
+owns workflow state, performs authoritative calculations, enforces consent, and
+decides whether an adapter may run. An agent output is a proposal or a typed
+request, never proof that an action occurred.
+
+| Agent | Implementation | Inputs | Validated output | Explicitly cannot |
+| --- | --- | --- | --- | --- |
+| Care Journey Agent | `src/abyss/care_journey_agent.py` | User message, active journey identifier, and a compact user-care context | A closed-schema `JourneyPlan` containing intent, target identifiers, proposed steps, reusable context, refresh requirements, and missing fields | Mutate state, select coverage, calculate cost, grant consent, or execute an action |
+| Onboarding Agent | `src/abyss/agents.py` | User text or supported synthetic document text, source identifier, and existing intake context | Candidate `DecisionFact` records plus missing fields and clarification questions | Verify its own facts, infer absent benefits, determine eligibility, or make a recommendation |
+| Knowledge Agent | `src/abyss/agents.py` | Deterministic evaluations, controlled catalog results, and the user's question | A grounded explanation or a procedure-catalog candidate | Create catalog facts, recalculate an evaluation, resolve an ambiguous procedure without confirmation, or change an authoritative result |
+| Matching Agent | `src/abyss/agents.py` | Candidate plan identifiers, provider identifier, and optional care-path context | A typed `MatchingRequest` and, after evaluation, a grounded explanation of feasibility and constraints | Rank plans, determine network status, calculate annual cost, or return a self-authored recommendation |
+| Booking Agent | `src/abyss/booking.py` | Synthetic scheduling language and a deterministic default date | Validated date range and time-of-day preferences used by the engine to search controlled slot inventory | Select a slot, disclose information, book, cancel, or reschedule an appointment |
+
+The booking boundary also includes a deterministic `SchedulerAgent` helper in
+`src/abyss/agents.py`. It constructs the exact provider, facility, date, and
+time scope presented for consent. It does not execute the booking. Only the
+Care Journey Engine may call the sandbox booking service after matching that
+scope to a valid, unexpired consent record and the current workflow stage.
+
+The Care Journey Agent and Care Journey Engine are intentionally different:
+the agent proposes how to route a message, while the engine decides whether
+that proposal is valid and performs the allowed state transition.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CJA as Care Journey Agent
+    participant Engine as Care Journey Engine
+    participant Onboard as Onboarding Agent
+    participant Knowledge as Knowledge Agent
+    participant Match as Matching Agent
+    participant Booking as Booking Agent
+    participant Rules as Deterministic rules
+    participant Adapter as Sandbox adapter
+
+    User->>CJA: Spoken or typed request
+    CJA-->>Engine: Validated JourneyPlan proposal
+    Engine->>Onboard: Extract candidate intake facts
+    Onboard-->>Engine: Facts, missing fields, questions
+    Engine->>Knowledge: Resolve against controlled catalogs
+    Knowledge-->>Engine: Catalog candidate or grounded context
+    Engine->>Match: Build evaluation request
+    Match-->>Rules: Typed plan and provider identifiers
+    Rules-->>Engine: Feasibility, costs, ranking, rejection reasons
+    Engine->>Knowledge: Explain authoritative result
+    Knowledge-->>User: Grounded comparison and caveats
+    Engine->>Booking: Validate scheduling preferences
+    Booking-->>Engine: Validated slot-search preferences
+    Engine-->>User: Controlled candidate slots
+    User->>Engine: Select slot and grant exact-scope consent
+    Engine->>Rules: Check stage, consent, and idempotency
+    Rules-->>Engine: Action allowed or blocked
+    Engine->>Adapter: Execute only when allowed
+    Adapter-->>Engine: Sandbox receipt or explicit failure
 ```
 
 ## Components
@@ -76,13 +150,15 @@ flowchart LR
 | Component | Responsibility | Authority boundary |
 | --- | --- | --- |
 | Communication adapter | Normalize voice, typed, and messaging events | Cannot determine eligibility or invoke action adapters |
-| Onboarding agent | Extract candidate facts, classify documents, and identify missing information | Candidate facts remain unverified until validated or confirmed |
+| Care Journey Agent | Classify a message and propose bounded routing across care journeys | Cannot mutate journey state or execute its proposed steps |
+| Onboarding Agent | Extract candidate facts, classify documents, and identify missing information | Candidate facts remain unverified until validated or confirmed |
 | Document ingestion | Accept camera images and PDFs, parse supported fields, and retain provenance | Cannot infer benefits that are absent from the source document |
 | Fact and memory ledger | Preserve known, inferred, missing, contradictory, verified, and superseded facts | Never overwrites history or silently promotes confidence |
-| Catalog services | Retrieve controlled plan, benefit, provider, network, and price records | Retrieval only; catalogs do not make recommendations |
+| Knowledge Agent and catalog services | Resolve procedure candidates and explain source-backed catalog and evaluation evidence | Retrieval and explanation only; cannot invent facts or change an evaluation |
+| Matching Agent | Create typed evaluation requests and explain returned constraints | Deterministic rules retain feasibility, cost, network, and ranking authority |
+| Booking Agent | Extract scheduling preferences used to search controlled slot inventory | Cannot select, book, cancel, or reschedule a slot |
 | Care Journey Engine | Coordinate commands, facts, evaluations, consent, adapters, and events | Sole workflow authority |
 | Deterministic rules | Calculate annual cost and enforce eligibility, network, consent, and state rules | Model output cannot override a rule result |
-| Explanation agent | Explain authoritative evaluations and rejection reasons in plain language | Cannot change evaluation results or authorize actions |
 | Sandbox adapters | Simulate enrollment, transition, provider verification, and booking | Require exact consent, valid stage, and idempotency key |
 | Audit ledger | Record facts, approvals, state changes, failures, and action receipts | Read only to user and review agents |
 
@@ -192,17 +268,30 @@ Enrollment approval, coverage transition approval, provider disclosure approval,
 
 ## Data flow
 
-1. The communication layer creates a normalized user intent.
-2. Document and onboarding agents propose candidate facts.
-3. Schema validation and user confirmation determine fact status.
-4. The ledger appends facts with provenance and preserves corrections.
-5. Catalog services return source backed plan and provider records.
-6. Deterministic rules calculate and rank feasible care paths.
-7. Nemotron explains the authoritative evaluation without changing it.
-8. The user grants or denies exact consent for a proposed action.
-9. The engine validates consent, stage, prerequisites, and idempotency.
-10. A sandbox adapter executes and returns a receipt.
-11. The audit ledger records the request, result, and recovery state.
+1. The communication layer normalizes the channel event, and the Care Journey
+   Agent proposes a closed-schema intent and routing plan.
+2. The Care Journey Engine validates the plan against current journey and
+   appointment identifiers before executing any proposed step.
+3. Document ingestion supplies source text, and the Onboarding Agent proposes
+   candidate facts and clarification questions.
+4. Schema validation and user confirmation determine fact status; the ledger
+   appends accepted facts with provenance and preserves corrections.
+5. The Knowledge Agent resolves procedure candidates against the controlled
+   catalog and identifies ambiguity without creating missing facts.
+6. The Matching Agent creates a typed evaluation request from known plan and
+   provider identifiers. Deterministic rules calculate feasibility, annual
+   cost, network constraints, ranking, and rejection reasons.
+7. The Knowledge or Matching Agent explains the authoritative evaluation using
+   only supplied evidence and cannot alter the result.
+8. At the booking stage, the Booking Agent extracts scheduling preferences; the
+   engine searches controlled inventory and the user selects a specific slot.
+9. The user grants or denies consent scoped to the exact proposed action. Each
+   enrollment, transition, disclosure, booking, and cancellation action has a
+   separate consent record.
+10. The engine validates consent, workflow stage, prerequisites, selected
+    identifiers, and idempotency before invoking an adapter.
+11. A controlled or sandbox adapter executes and returns a receipt or an
+    explicit failure; the audit ledger records the request and outcome.
 
 ## Security boundaries
 
