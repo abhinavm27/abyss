@@ -254,11 +254,11 @@ tests/                     Deterministic unit and vertical slice tests
 
 ## Team VELA
 
-| Team member | Role |
-| --- | --- |
-| Abishek Muralikrishna | Role and contact to be confirmed |
-| Abhinav Ravindran | Role and contact to be confirmed |
-| Fatima Aguilar | Role and contact to be confirmed |
+| Team member | Role | Contact |
+| --- | --- | --- |
+| Abishek Muralikrishna | AI Systems and NVIDIA Integration Lead | [Abishek.bm@gmail.com](mailto:Abishek.bm@gmail.com), [508-904-9436](tel:+15089049436) |
+| Abhinav Ravindran | Backend and Healthcare Data Engineering Lead | [abhinav.ravindran27@gmail.com](mailto:abhinav.ravindran27@gmail.com) |
+| Fatima Aguilar | Product, UX, and Frontend Lead | [fsaguilar16@gmail.com](mailto:fsaguilar16@gmail.com), [978-242-2510](tel:+19782422510) |
 
 ## Submission links
 

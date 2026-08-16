@@ -14,7 +14,7 @@ One submission is permitted per team. This tracker records repository readiness;
 | Demo video | Pending | Runbook, core loop, and deployed interface are ready | Record a 3 to 5 minute walkthrough, upload unlisted, and verify the link signed out |
 | Repository link | Ready | `https://github.com/abhinavm27/abyss` on merged `main` | Enter the repository URL in the form |
 | Deployed URL or working screen capture | Ready | `https://vela-care-path.fsaguilar16.chatgpt.site/` | Verify the final deployed build immediately before submission |
-| Team roster | Partially ready | All three names are in README | Confirm roles and contact information |
+| Team roster | Ready | All three names, roles, and contact details are in README | Copy the roster into the submission form |
 
 ## README requirements
 
