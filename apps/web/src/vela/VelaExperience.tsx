@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, getToken, type CareJourneySnapshot } from "@/lib/api";
+import { api, getToken, type CareAgentResponse, type CareContext, type CareJourneySnapshot } from "@/lib/api";
 import { useVoiceSession } from "@/hooks/useVoiceSession";
 import { captureCard } from "@/lib/cardScan";
 import { NeuralPath } from "@/vela/NeuralPath";
@@ -56,6 +56,17 @@ const sceneOrder: Scene[] = [
   "booking",
   "complete",
 ];
+
+function sceneForJourney(journey: CareJourneySnapshot | null): Scene {
+  if (!journey) return "listening";
+  if (journey.stage === "intake") return "understanding";
+  if (journey.stage === "compare") return "working";
+  if (journey.stage === "recommend") return "recommendation";
+  if (journey.stage === "verify") return "consent";
+  if (journey.stage === "book") return "booking";
+  if (journey.stage === "complete") return "complete";
+  return "context";
+}
 
 const sceneCopy: Record<Scene, { title: string; eyebrow: string; status: string }> = {
   listening: { title: "Where do you need\nto go from here?", eyebrow: "", status: "I’m listening." },
@@ -193,20 +204,21 @@ function DecisionCard({ onAnswer }: { onAnswer: () => void }) {
   );
 }
 
-function RecommendationCard({ planName, onContinue, onExplain }: { planName: string; onContinue: () => void; onExplain: () => void }) {
+function RecommendationCard({ journey, onContinue, onExplain }: { journey: CareJourneySnapshot; onContinue: () => void; onExplain: () => void }) {
+  const option = journey.current_plan_options[0];
   return (
     <section className="vela-recommendation-card">
       <div className="vela-verified"><Check /></div>
-      <h2>{planName}</h2>
-      <p><Building2 />Northwest Imaging</p>
-      <p><CalendarDays />Tuesday at 10:30 AM</p>
+      <h2>Keep {journey.current_plan_name}</h2>
+      <p><Building2 />{option?.hospital ?? "Hospital options ready"}</p>
+      <p><CalendarDays />{journey.current_plan_options.length} current-plan option{journey.current_plan_options.length === 1 ? "" : "s"}</p>
       <hr />
-      <p><WalletCards />Estimated responsibility: $420</p>
-      <p className="is-savings"><Tag />Potential savings: $1,060</p>
+      <p><WalletCards />Lowest member-cost scenario: {option ? `$${option.estimated_member_cost.toLocaleString()}` : "pending"}</p>
+      {journey.alternative_plan && <p className="is-savings"><Tag />Alternate coverage scenario: ${journey.alternative_plan.estimated_annual_savings.toLocaleString()} potential annual savings</p>}
       <hr />
-      <p><ShieldCheck />Prior authorization required</p>
-      <p><Network />Confidence: <em>High</em></p>
-      <button className="vela-primary" onClick={onContinue}>Review and continue</button>
+      <p><ShieldCheck />Network verification follows selection</p>
+      <p><Network />Insurance change: <em>None</em></p>
+      <button className="vela-primary" onClick={onContinue}>Compare hospitals</button>
       <button className="vela-secondary" onClick={onExplain}>See how VELA decided</button>
     </section>
   );
@@ -230,19 +242,39 @@ function ConsentCard({ copy, onApprove, onBack }: { copy: ConsentCopy; onApprove
   );
 }
 
-function CompleteCard({ onReset }: { onReset: () => void }) {
+function CompleteCard({ journey, onAppointments, onReset }: { journey: CareJourneySnapshot; onAppointments: () => void; onReset: () => void }) {
+  const slot = journey.selected_booking_slot;
   return (
     <section className="vela-complete-card">
       <div className="vela-verified"><Check /></div>
       <h2>Your appointment is booked.</h2>
-      <p>Northwest Imaging<br />Tuesday at 10:30 AM</p>
-      <small>Sandbox confirmation VELA 1042<br />Receipt saved to your audit history</small>
-      <button className="vela-primary" onClick={onReset}>Return home</button>
+      <p>{slot?.hospital ?? journey.selected_care_path?.hospital}<br />{slot ? new Date(slot.starts_at).toLocaleString() : "Confirmed appointment"}</p>
+      <small>Sandbox booking confirmation<br />{journey.receipts.length} permissioned action receipt{journey.receipts.length === 1 ? "" : "s"} saved</small>
+      <button className="vela-primary" onClick={onAppointments}>View appointment</button>
+      <button className="vela-secondary" onClick={onReset}>Start another journey</button>
     </section>
   );
 }
 
 type ChatTurn = { role: "user" | "assistant"; text: string };
+
+function appointmentsFromContext(context: CareContext): VelaAppointment[] {
+  return context.appointments.map((item) => {
+    const owner = context.journeys.find((entry) => entry.journey_id === item.journey_id);
+    const date = item.booked_for ? new Date(item.booked_for) : null;
+    return {
+      id: item.appointment_id,
+      journeyId: item.journey_id,
+      title: item.description || owner?.title || "Appointment",
+      provider: owner?.selected_care_path?.hospital || "Provider",
+      date: date ? date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : "Date pending",
+      time: date ? date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "",
+      location: "Seattle, WA",
+      cost: owner?.selected_care_path?.estimated_member_cost || 0,
+      status: item.status === "confirmed" ? "Confirmed" as const : "Pending" as const,
+    };
+  });
+}
 
 function ChatPanel({ turns, value, busy, onValue, onSend }: { turns: ChatTurn[]; value: string; busy: boolean; onValue: (value: string) => void; onSend: () => void }) {
   return <section className="vela-chat-panel" aria-label="Chat with VELA"><div className="vela-chat-turns">{turns.slice(-2).map((turn, index) => <div className={`vela-chat-turn is-${turn.role}`} key={`${turn.role}-${index}`}><span>{turn.role === "assistant" ? "VELA" : "You"}</span><p>{turn.text}</p></div>)}{busy && <div className="vela-chat-turn is-assistant is-typing"><span>VELA is reasoning</span><p><i /><i /><i /></p></div>}</div><form onSubmit={(event) => { event.preventDefault(); onSend(); }}><MessageCircle aria-hidden /><input autoFocus type="text" enterKeyHint="send" value={value} onChange={(event) => onValue(event.currentTarget.value)} placeholder="Describe the care you need…" aria-label="Message VELA" /><button type="submit" disabled={!value.trim() || busy} aria-label="Send message"><Send /></button></form><div className="vela-chat-suggestions"><button type="button" onClick={() => onValue("I need a knee MRI and want to understand what it will cost.")}>I need an MRI</button><button type="button" onClick={() => onValue("Help me compare my insurance options.")}>Compare coverage</button></div></section>;
@@ -255,6 +287,7 @@ function ChatDocumentDock({ busy, onCamera, onUpload }: DocumentPromptProps) {
 
 export function VelaExperience() {
   const mobile = useIsMobile();
+  const liveMode = import.meta.env.VITE_LIVE_MODE === "true" && Boolean(getToken());
   const [tab, setTab] = useState<AppTab>("home");
   const [inputMode, setInputMode] = useState<"voice" | "chat">("voice");
   const [scene, setScene] = useState<Scene>(() => {
@@ -263,6 +296,9 @@ export function VelaExperience() {
   });
   const [busy, setBusy] = useState(false);
   const [journey, setJourney] = useState<CareJourneySnapshot | null>(null);
+  const [careContext, setCareContext] = useState<CareContext | null>(null);
+  const [matchingReason, setMatchingReason] = useState<string | null>(null);
+  const [bookingText, setBookingText] = useState("2026-08-30 to 2026-09-15, any time");
   const [notice, setNotice] = useState<string | null>(null);
   const [chatValue, setChatValue] = useState("");
   const [careRequest, setCareRequest] = useState("");
@@ -270,22 +306,53 @@ export function VelaExperience() {
   const [chatStarted, setChatStarted] = useState(false);
   const [chatVisualProgress, setChatVisualProgress] = useState(0);
   const [voiceStarted, setVoiceStarted] = useState(false);
-  const [consentIndex, setConsentIndex] = useState(0);
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([{ role: "assistant", text: "Where do you need to go from here? Tell me what care you need and I’ll ask only what changes the recommendation." }]);
-  const [documents, setDocuments] = useState<VelaDocument[]>([
+  const [documents, setDocuments] = useState<VelaDocument[]>(liveMode ? [] : [
     { id: "demo-sbc", name: "Current Plan SBC.pdf", kind: "Summary of Benefits", status: "Verified", added: "Aug 15" },
     { id: "demo-referral", name: "Knee MRI referral.pdf", kind: "Referral", status: "Verified", added: "Aug 15" },
   ]);
-  const [appointments, setAppointments] = useState<VelaAppointment[]>([
+  const [appointments, setAppointments] = useState<VelaAppointment[]>(liveMode ? [] : [
     { id: "demo-appointment", title: "Knee MRI without contrast", provider: "Northwest Imaging", date: "Tuesday, September 3", time: "10:30 AM", location: "Seattle, WA", cost: 420, status: "Confirmed" },
   ]);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const liveMode = import.meta.env.VITE_LIVE_MODE === "true" && Boolean(getToken());
-  const voice = useVoiceSession({ onError: (message) => setNotice(message) });
+  const adoptJourney = (next: CareJourneySnapshot, context?: CareContext) => {
+    setJourney(next);
+    if (context) setCareContext(context);
+    const nextScene = sceneForJourney(next);
+    setScene(nextScene);
+    if (next.stage === "recommend") setTab("paths");
+    if (next.stage === "book" || next.stage === "complete") setTab("appointments");
+  };
+  const adoptAgentResponse = (response: CareAgentResponse) => {
+    setCareContext(response.context);
+    if (response.journey) adoptJourney(response.journey, response.context);
+    setChatTurns((turns) => [...turns, { role: "assistant", text: response.reply }]);
+  };
+  const voice = useVoiceSession({
+    onError: (message) => setNotice(message),
+    onUiEvent: (target, payload) => {
+      if (target === "care_journey") adoptAgentResponse(payload as CareAgentResponse);
+    },
+  });
   const demoMic = useDemoMicrophone();
   const index = sceneOrder.indexOf(scene);
   const progress = Math.max(0, index / (sceneOrder.length - 1));
   const copy = sceneCopy[scene];
+  const requestedCare = String(
+    journey?.procedure_resolution?.canonical_name
+      ?? journey?.facts?.find((fact) => fact.name === "requested_procedure")?.value
+      ?? "Your care request",
+  );
+  const liveCopy = liveMode && journey ? {
+    eyebrow: requestedCare,
+    title: journey.stage === "intake" ? "A few details will\ncomplete your request."
+      : journey.stage === "recommend" ? "Your current-plan\noptions are ready."
+      : journey.stage === "verify" ? "Verify the path\nbefore booking."
+      : journey.stage === "book" ? "Choose the exact\nappointment you want."
+      : journey.stage === "complete" ? "Your appointment\nis confirmed."
+      : copy.title,
+    status: journey.onboarding_questions[0] ?? copy.status,
+  } : copy;
   const resolved = ["recommendation", "consent", "booking", "complete"].includes(scene);
   const voiceLevel = inputMode === "chat" && chatBusy ? .72 : liveMode ? voice.micLevel : demoMic.level;
   const agentCount = useMemo(() => {
@@ -294,17 +361,18 @@ export function VelaExperience() {
     if (index >= sceneOrder.indexOf("recommendation")) return 4;
     return Math.max(0, index - 1);
   }, [index, scene]);
-  const selectedEvaluation = journey?.evaluations.find((item) => item.feasible) ?? journey?.evaluations[0];
-  const recommendedPlanName = liveMode && selectedEvaluation ? `Switch to ${selectedEvaluation.plan_name}` : "Keep your current insurance";
-  const liveConsentCopies: ConsentCopy[] = [
-    { title: "Approve enrollment in the recommended plan.", description: `VELA is ready to submit a sandbox enrollment for ${selectedEvaluation?.plan_name ?? "the recommended plan"}.`, items: ["Submit the selected plan and member information", "Receive and save the enrollment receipt", "Make no change to current coverage yet"], button: "Approve enrollment" },
-    { title: "Approve the coverage transition.", description: "Enrollment is confirmed. VELA must separately verify the effective date before changing coverage.", items: ["Confirm the new coverage effective date", "Verify the first premium is recorded", "Preserve the prior plan until confirmation"], button: "Approve transition" },
-    { title: "Approve sharing with the provider.", description: "VELA needs permission to verify the selected path with the provider.", items: ["Share only the relevant care and coverage details", "Verify network and authorization requirements", "Save the provider verification receipt"], button: "Approve verification" },
-    { title: "Approve appointment booking.", description: "VELA is ready to schedule with the recommended provider on your behalf.", items: ["Request the next available appointment", "Receive and manage appointment details", "Save the booking confirmation"], button: "Approve and book" },
-  ];
+  const verificationCopy: ConsentCopy = {
+    title: "Approve provider and network verification.",
+    description: journey?.selected_care_path
+      ? `VELA will verify ${journey.selected_care_path.hospital} against your current ${journey.selected_care_path.plan_name}.`
+      : "Choose a hospital before verification.",
+    items: ["Share only this care request and current-plan details", "Check network and provider status in the sandbox", "Save a verification receipt; do not book care"],
+    button: "Approve verification",
+  };
   const demoConsentCopy: ConsentCopy = { title: "Your approval is required to continue.", description: "VELA is ready to schedule with the recommended provider on your behalf.", items: ["Share relevant information with the provider", "Request the next available appointment", "Receive and manage appointment details"], button: "Approve and continue" };
 
   useEffect(() => {
+    if (liveMode) return;
     if (scene !== "understanding" && scene !== "context" && scene !== "working" && scene !== "verifying" && scene !== "booking") return;
     const next: Partial<Record<Scene, Scene>> = {
       understanding: "context",
@@ -315,27 +383,62 @@ export function VelaExperience() {
     };
     const timer = window.setTimeout(() => setScene(next[scene] ?? scene), scene === "working" ? 2400 : 1650);
     return () => window.clearTimeout(timer);
-  }, [scene]);
+  }, [liveMode, scene]);
+
+  useEffect(() => {
+    if (!liveMode) return;
+    let cancelled = false;
+    void api.careContext().then(async (context) => {
+      if (cancelled) return;
+      setCareContext(context);
+      const active = context.journeys.find((item) => item.status === "active") ?? context.journeys[0];
+      if (active) {
+        const snapshot = await api.journey(active.journey_id);
+        if (!cancelled) adoptJourney(snapshot, context);
+      }
+      setAppointments(appointmentsFromContext(context));
+    }).catch((error) => { if (!cancelled) setNotice(error instanceof Error ? error.message : "VELA could not load your care context."); });
+    return () => { cancelled = true; };
+    // Load once after authentication; journey mutations update state directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMode]);
+
+  useEffect(() => {
+    if (!liveMode || !journey?.booking_tasks.some((task) => task.status === "scheduled")) return;
+    const timer = window.setInterval(() => {
+      void api.journey(journey.journey_id).then(async (next) => {
+        adoptJourney(next);
+        if (next.stage === "complete") {
+          const context = await api.careContext();
+          setCareContext(context);
+          setAppointments(appointmentsFromContext(context));
+        }
+      }).catch(() => undefined);
+    }, 1200);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMode, journey?.journey_id, journey?.booking_tasks]);
 
   const reset = () => {
     voice.disconnect(); demoMic.stop();
     setScene("listening");
     setJourney(null);
     setNotice(null);
+    setMatchingReason(null);
     setChatStarted(false);
     setChatVisualProgress(0);
     setVoiceStarted(false);
-    setConsentIndex(0);
     setCareRequest("");
+    setTab("home");
+    setChatTurns([{ role: "assistant", text: "Where do you need to go from here? Tell me what care you need and I’ll ask only what changes the recommendation." }]);
   };
 
   const begin = async () => {
     if (inputMode === "chat") return;
     try {
       if (liveMode) await voice.connect();
-      else await demoMic.start();
+      else { await demoMic.start(); setScene("documents"); }
       setVoiceStarted(true);
-      setScene("documents");
     } catch (error) {
       setNotice(error instanceof Error && error.name === "NotAllowedError" ? "Microphone access was denied. You can continue by chat instead." : "Microphone unavailable. You can continue by chat instead.");
       setInputMode("chat");
@@ -348,17 +451,16 @@ export function VelaExperience() {
     setChatStarted(true); setChatVisualProgress((current) => Math.min(.62, current + .08));
     setChatTurns((turns) => [...turns, { role: "user", text }]); setChatValue(""); setChatBusy(true);
     try {
-      await new Promise((resolve) => window.setTimeout(resolve, 260)); setChatVisualProgress((current) => Math.min(.68, current + .06));
-      await new Promise((resolve) => window.setTimeout(resolve, 340)); setChatVisualProgress((current) => Math.min(.74, current + .07));
-      if (liveMode && voice.isActive) voice.sendText(text);
-      else if (liveMode) {
-        const response = await api.agentChat(text, journey ?? { journey_stage: scene });
-        setChatTurns((turns) => [...turns, { role: "assistant", text: response.reply }]);
+      if (liveMode && voice.isActive) {
+        voice.sendText(text);
+      } else if (liveMode) {
+        const response = await api.careAgentMessage(text, journey?.journey_id);
+        adoptAgentResponse(response);
       } else {
         await new Promise((resolve) => window.setTimeout(resolve, 420));
         setChatTurns((turns) => [...turns, { role: "assistant", text: "I can help with that. First, show me your coverage so I can compare the complete cost instead of guessing from the procedure price alone." }]);
+        setScene("documents");
       }
-      setScene("documents");
       setChatVisualProgress((current) => Math.min(.78, current + .05));
     } catch (error) { setNotice(error instanceof Error ? error.message : "VELA could not send that message."); }
     finally { setChatBusy(false); }
@@ -376,18 +478,17 @@ export function VelaExperience() {
         const started = journey ?? await api.startJourney();
         const spokenRequest = [...voice.transcript].reverse().find((turn) => turn.role === "user")?.text;
         const onboarded = started.stage === "intake" ? await api.journeyOnboard(started.journey_id, careRequest || spokenRequest || "Keep Dr. Lee. MRI knee without contrast on September 4, 2026. Coverage ends August 31, 2026.") : started;
-        setJourney(onboarded);
-        if (file.type.startsWith("image/")) await api.scanCard(file);
-        else await api.parseSbc(file);
         const consented = await api.journeyConsent(onboarded.journey_id, {
           action: "process_documents",
           scope: `coverage document ${file.name}`,
           approved: true,
         });
-        setJourney(consented);
+        adoptJourney(consented);
+        if (file.type.startsWith("image/")) await api.scanCard(file);
+        else await api.parseSbc(file);
       }
       setDocuments((items) => items.map((item) => item.id === newDocument.id ? { ...item, status: "Verified" } : item));
-      setScene("understanding");
+      if (!liveMode) setScene("understanding");
     } catch (error) {
       setDocuments((items) => items.map((item) => item.status === "Processing" ? { ...item, status: "Review needed" } : item));
       setNotice(error instanceof Error ? error.message : "VELA could not read that document.");
@@ -411,39 +512,89 @@ export function VelaExperience() {
     }
   };
 
-  const approve = async () => {
+  const verifySelectedPath = async () => {
     setBusy(true);
     try {
-      if (liveMode && journey) {
-        let current = journey;
-        if (consentIndex === 0 && current.stage === "recommend") current = await api.journeyAdvance(current.journey_id);
-        const actions = ["enroll_plan", "transition_coverage", "share_with_provider", "book_appointment"];
-        const scopes = [selectedEvaluation?.plan_id ?? "recommended plan", `current to ${selectedEvaluation?.plan_id ?? "recommended plan"}`, "dr-lee / seattle-general", "dr-lee / 2026-09-04 10:30"];
-        const action = actions[consentIndex];
-        const scope = scopes[consentIndex];
-        const consented = await api.journeyConsent(current.journey_id, {
-          action,
-          scope,
-          approved: true,
-        });
-        const actioned = await api.journeyAction(consented.journey_id, {
-          action,
-          scope,
-          idempotency_key: `vela-${action}-${consented.journey_id}`,
-          ...(action === "transition_coverage" ? { new_effective_date: "2026-09-01", first_premium_confirmed: true } : {}),
-        });
-        setJourney(actioned);
-        if (consentIndex < actions.length - 1) {
-          setConsentIndex((value) => value + 1);
-          return;
-        }
-      }
-      setScene("booking");
+      if (!journey?.selected_care_path) throw new Error("Choose a hospital first.");
+      const selected = journey.selected_care_path;
+      const scope = `Dr. Lee / ${selected.hospital} / ${selected.plan_name}`;
+      await api.journeyConsent(journey.journey_id, { action: "share_with_provider", scope, approved: true });
+      const actioned = await api.journeyAction(journey.journey_id, {
+        action: "share_with_provider",
+        scope,
+        idempotency_key: `vela-verify-${journey.journey_id}`,
+      });
+      adoptJourney(actioned);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The approved action could not be completed.");
     } finally {
       setBusy(false);
     }
+  };
+
+  const selectPath = async (hospitalId: number) => {
+    if (!journey) return;
+    setBusy(true); setNotice(null);
+    try { const next = await api.journeySelectCurrentPath(journey.journey_id, hospitalId); adoptJourney(next); setTab("home"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "VELA could not select that path."); }
+    finally { setBusy(false); }
+  };
+
+  const explainPaths = async () => {
+    if (!journey) return;
+    setBusy(true); setNotice(null);
+    try {
+      const result = await api.journeyMatchingReason(journey.journey_id, "Explain the current-plan hospital ranking and the separate alternate-coverage scenario without treating estimates as guarantees.");
+      setJourney(result.journey); setMatchingReason(result.reason);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Nemotron could not explain the ranking."); }
+    finally { setBusy(false); }
+  };
+
+  const openJourney = async (journeyId: string) => {
+    setBusy(true); setNotice(null);
+    try { adoptJourney(await api.journey(journeyId)); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "VELA could not open that journey."); }
+    finally { setBusy(false); }
+  };
+
+  const findSlots = async () => {
+    if (!journey) return;
+    setBusy(true); setNotice(null);
+    try { adoptJourney(await api.journeyBookingPreferences(journey.journey_id, bookingText)); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "The Booking Agent could not read those preferences."); }
+    finally { setBusy(false); }
+  };
+
+  const selectSlot = async (slotId: string) => {
+    if (!journey) return;
+    setBusy(true); setNotice(null);
+    try { adoptJourney(await api.journeySelectBookingSlot(journey.journey_id, slotId)); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "VELA could not select that slot."); }
+    finally { setBusy(false); }
+  };
+
+  const bookSelectedSlot = async () => {
+    if (!journey?.selected_booking_slot || !journey.booking_consent_scope) return;
+    setBusy(true); setNotice(null);
+    try {
+      const scope = journey.booking_consent_scope;
+      let next: CareJourneySnapshot;
+      if (journey.reschedule_original_slot && journey.cancellation_consent_scope) {
+        await api.journeyConsent(journey.journey_id, { action: "book_appointment", scope, approved: true });
+        await api.journeyConsent(journey.journey_id, { action: "cancel_appointment", scope: journey.cancellation_consent_scope, approved: true });
+        next = await api.journeyReschedule(journey.journey_id, {
+          booking_scope: scope,
+          cancellation_scope: journey.cancellation_consent_scope,
+          idempotency_key: `vela-reschedule-${journey.journey_id}-${journey.selected_booking_slot.slot_id}`,
+        });
+      } else {
+        await api.journeyConsent(journey.journey_id, { action: "book_appointment", scope, approved: true });
+        next = await api.journeyAction(journey.journey_id, { action: "book_appointment", scope, idempotency_key: `vela-book-${journey.journey_id}-${journey.selected_booking_slot.slot_id}` });
+      }
+      adoptJourney(next);
+      const context = await api.careContext(); setCareContext(context); setAppointments(appointmentsFromContext(context));
+    } catch (error) { setNotice(error instanceof Error ? error.message : "The approved booking could not be completed."); }
+    finally { setBusy(false); }
   };
 
   return (
@@ -454,25 +605,25 @@ export function VelaExperience() {
           <NeuralPath className={(inputMode === "chat" ? !chatStarted : !voiceStarted) ? "is-hidden" : ""} progress={inputMode === "chat" ? Math.max(chatVisualProgress, chatStarted ? progress : 0, voiceLevel * .55) : voiceStarted ? Math.max(progress, voiceLevel * .55) : 0} energy={voiceLevel} resolved={resolved} />
           <div className="vela-stage-content">
             <div className="vela-mode-switch"><button type="button" className={inputMode === "voice" ? "is-active" : ""} onClick={() => setInputMode("voice")}><Phone />Call</button><button type="button" className={inputMode === "chat" ? "is-active" : ""} onClick={() => setInputMode("chat")}><MessageCircle />Chat</button></div>
-            <p className="vela-eyebrow">{inputMode === "chat" && chatStarted ? "VELA care network" : copy.eyebrow}</p>
-            <h1>{(inputMode === "chat" && chatStarted ? "Finding your clearest path." : copy.title).split("\n").map((line, lineIndex, lines) => <span key={line}>{line}{lineIndex < lines.length - 1 && <br />}</span>)}</h1>
-            {inputMode === "voice" && <><div className="vela-listener" style={{ "--energy": voiceLevel } as React.CSSProperties}><Waveform /><VoiceOrb active={scene !== "complete"} /><Waveform /></div><p className="vela-status">{voiceLevel > .08 ? "I can hear you…" : copy.status}</p></>}
+            <p className="vela-eyebrow">{inputMode === "chat" && chatStarted ? requestedCare : liveCopy.eyebrow}</p>
+            <h1>{(inputMode === "chat" && chatStarted ? "Finding your clearest path." : liveCopy.title).split("\n").map((line, lineIndex, lines) => <span key={line}>{line}{lineIndex < lines.length - 1 && <br />}</span>)}</h1>
+            {inputMode === "voice" && <><div className="vela-listener" style={{ "--energy": voiceLevel } as React.CSSProperties}><Waveform /><VoiceOrb active={scene !== "complete"} /><Waveform /></div><p className="vela-status">{voiceLevel > .08 ? "I can hear you…" : liveCopy.status}</p></>}
             {inputMode === "chat" && <ChatPanel turns={chatTurns} value={chatValue} busy={chatBusy} onValue={setChatValue} onSend={sendChat} />}
 
             {scene === "listening" && inputMode === "voice" && <div className="vela-start"><p>Tell VELA what care you need, or begin with the guided demo.</p><button onClick={() => void begin()}>{(liveMode ? voice.isActive : demoMic.active) ? <><Mic />Listening now</> : <><Mic />Start a care request</>}</button></div>}
             {["understanding", "context", "working", "verifying"].includes(scene) && <AgentPanel activeCount={agentCount} />}
             {scene === "decision" && <DecisionCard onAnswer={handleDecision} />}
-            {scene === "recommendation" && <RecommendationCard planName={recommendedPlanName} onContinue={() => { setConsentIndex(0); setScene("consent"); }} onExplain={() => setNotice("VELA compared annual cost, network status, medication coverage, physician preference, and appointment availability. Deterministic rules selected the feasible path; Nemotron explained the evidence.")} />}
-            {scene === "consent" && <ConsentCard copy={liveMode ? liveConsentCopies[consentIndex] : demoConsentCopy} onApprove={approve} onBack={() => setScene("recommendation")} />}
-            {scene === "booking" && <AgentPanel activeCount={4} />}
-            {scene === "complete" && <CompleteCard onReset={reset} />}
+            {scene === "recommendation" && journey && <RecommendationCard journey={journey} onContinue={() => setTab("paths")} onExplain={() => void explainPaths()} />}
+            {scene === "consent" && <ConsentCard copy={liveMode ? verificationCopy : demoConsentCopy} onApprove={liveMode ? verifySelectedPath : () => setScene("booking")} onBack={() => liveMode ? setTab("paths") : setScene("recommendation")} />}
+            {scene === "booking" && <section className="vela-booking-handoff"><AgentPanel activeCount={4} /><button className="vela-primary" onClick={() => setTab("appointments")}>Choose an appointment</button></section>}
+            {scene === "complete" && journey && <CompleteCard journey={journey} onAppointments={() => setTab("appointments")} onReset={reset} />}
           </div>
           {((inputMode === "chat" && chatStarted) || (inputMode === "voice" && voiceStarted)) && scene === "documents" && <ChatDocumentDock busy={busy} onCamera={() => void captureCard().then((file) => file && handleFiles([file]))} onUpload={handleFiles} />}
           {notice && <div className="vela-notice"><span>{notice}</span><button onClick={() => setNotice(null)} aria-label="Close"><X /></button></div>}
-        </main> : <main className="vela-stage vela-tab-stage">
-          {tab === "paths" && <PathsTab />}
-          {tab === "appointments" && <AppointmentsTab items={appointments} onItems={setAppointments} liveMode={liveMode} />}
-          {tab === "documents" && <DocumentsTab documents={documents} onDocuments={setDocuments} liveMode={liveMode} openCamera={cameraOpen} onOpenCamera={setCameraOpen} />}
+        </main> : <main key={tab} className="vela-stage vela-tab-stage">
+          {tab === "paths" && <PathsTab journey={journey} context={careContext} busy={busy} matchingReason={matchingReason} onSelect={(hospitalId) => void selectPath(hospitalId)} onExplain={() => void explainPaths()} onOpenJourney={(journeyId) => void openJourney(journeyId)} />}
+          {tab === "appointments" && <AppointmentsTab items={appointments} onItems={setAppointments} liveMode={liveMode} journey={journey} busy={busy} bookingText={bookingText} onBookingText={setBookingText} onFindSlots={() => void findSlots()} onSelectSlot={(slotId) => void selectSlot(slotId)} onBook={() => void bookSelectedSlot()} />}
+          {tab === "documents" && <DocumentsTab documents={documents} onDocuments={setDocuments} liveMode={liveMode} openCamera={cameraOpen} onOpenCamera={setCameraOpen} onProcessFile={async (file) => { await handleFiles([file]); }} />}
           {tab === "preferences" && <PreferencesTab />}
         </main>}
       {mobile && <MobileNav scene={scene} tab={tab} onTab={setTab} onReset={reset} />}
