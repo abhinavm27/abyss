@@ -290,7 +290,7 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
     setStatus("idle");
   }, [stopPlayback]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (journeyIdOverride?: string | null) => {
     if (wsRef.current) return;
     // getUserMedia is deliberately unavailable on ordinary HTTP origins. Check
     // before opening a WebSocket so an insecure URL does not leave a short-lived
@@ -396,7 +396,7 @@ export function useVoiceSession({ onUiEvent, onError, activeJourneyId }: Options
     ws.send(JSON.stringify({
       type: "auth",
       token: getToken(),
-      active_journey_id: activeJourneyId ?? undefined,
+      active_journey_id: (journeyIdOverride === undefined ? activeJourneyId : journeyIdOverride) ?? undefined,
     }));
 
     // If the microphone is unavailable the whole session is torn down. Leaving

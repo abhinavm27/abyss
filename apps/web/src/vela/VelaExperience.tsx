@@ -786,8 +786,19 @@ export function VelaExperience() {
 
   const begin = async () => {
     if (inputMode === "chat") return;
+    let journeyId = journey?.journey_id;
     try {
-      if (liveMode) await voice.connect();
+      if (liveMode) {
+        if (!journeyId) {
+          setBusy(true);
+          setNotice("Starting a new care journey…");
+          const started = await api.startJourney({ empty: true });
+          journeyId = started.journey_id;
+          adoptJourney(started);
+          setNotice(null);
+        }
+        await voice.connect(journeyId);
+      }
       else {
         await demoMic.start();
         setScene("documents");
@@ -800,6 +811,8 @@ export function VelaExperience() {
         secureAppUrl: SECURE_APP_URL,
       }));
       setInputMode("chat");
+    } finally {
+      setBusy(false);
     }
   };
 

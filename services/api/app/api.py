@@ -132,6 +132,7 @@ class JourneyStartIn(BaseModel):
     procedure: str = Field(default="MRI knee without contrast", min_length=1)
     provider: str = Field(default="Dr. Lee", min_length=1)
     facility: str = Field(default="Seattle General", min_length=1)
+    empty: bool = False
 
 
 class JourneyOnboardIn(BaseModel):
@@ -635,10 +636,11 @@ def _open_journey(user_id: int, *, seed_defaults: bool = True) -> CareJourney:
 @app.post("/api/journeys")
 def start_journey(body: JourneyStartIn, user_id: int = Depends(require_user)):
     journey = _open_journey(user_id, seed_defaults=False)
-    now = datetime.now(timezone.utc)
-    for name, value in (("requested_procedure", body.procedure), ("preferred_provider", body.provider),
-                        ("preferred_facility", body.facility)):
-        journey.record_fact(DecisionFact(name, value, "user_request", now, 1.0, VerificationStatus.SOURCE_BACKED))
+    if not body.empty:
+        now = datetime.now(timezone.utc)
+        for name, value in (("requested_procedure", body.procedure), ("preferred_provider", body.provider),
+                            ("preferred_facility", body.facility)):
+            journey.record_fact(DecisionFact(name, value, "user_request", now, 1.0, VerificationStatus.SOURCE_BACKED))
     return _journey_payload(journey)
 
 
@@ -696,7 +698,15 @@ def care_agent_message(
         journey = _owned_journey(plan.target_journey_id, user_id)
         reply: str
         if plan.intent == JourneyIntent.NEW_CARE_REQUEST:
-            journey = _open_journey(user_id, seed_defaults=False)
+            started_journey = _owned_journey(body.active_journey_id, user_id)
+            if (
+                started_journey is not None
+                and started_journey.stage.value == "intake"
+                and not started_journey.workflow.care_state.facts
+            ):
+                journey = started_journey
+            else:
+                journey = _open_journey(user_id, seed_defaults=False)
             now = datetime.now(timezone.utc)
             for name, value in (("preferred_provider", "Dr. Lee"),
                                 ("preferred_facility", "Seattle General")):

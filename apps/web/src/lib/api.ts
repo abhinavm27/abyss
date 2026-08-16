@@ -663,7 +663,7 @@ export const api = {
       }),
     }),
 
-  startJourney: (body?: { procedure?: string; provider?: string; facility?: string }) =>
+  startJourney: (body?: { procedure?: string; provider?: string; facility?: string; empty?: boolean }) =>
     req<CareJourneySnapshot>("/api/journeys", {
       method: "POST",
       body: JSON.stringify(body ?? {}),
