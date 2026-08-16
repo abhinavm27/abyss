@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the ABYSS health check every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=abyss-healthcheck.service
+
+[Install]
+WantedBy=timers.target
