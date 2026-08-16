@@ -1,5 +1,9 @@
 # GN100 deployment
 
+All coding tasks must first follow `docs/BUILD_AND_DEPLOY_RUNBOOK.md`. This file
+contains the additional systemd installation, health timer, and virtual
+environment migration details.
+
 This deployment keeps the current VELA application in `/home/acer01/abyss-demo`
 and reads the Seattle hospital catalog from the original `/home/acer01/abyss`
 tree. It does not merge runtime state, credentials, or virtual environments into

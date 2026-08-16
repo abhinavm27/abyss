@@ -35,7 +35,37 @@ and books a sandbox appointment.
 4. Make state transitions explicit and reject invalid transitions.
 5. Display known, inferred, missing, and verified states distinctly.
 6. Keep live-provider and enrollment adapters behind sandbox interfaces.
-7. Run `PYTHONPATH=src python3 -m unittest discover -s tests -v` before handing off.
+7. Run the complete validation matrix in `docs/BUILD_AND_DEPLOY_RUNBOOK.md`
+   before handing off; use the project virtual environment for Python tests.
+
+## New task startup and deployment contract
+
+Every new repository-aware task must read
+`docs/BUILD_AND_DEPLOY_RUNBOOK.md` before changing, testing, or deploying code.
+That runbook is the source of truth for the component map, complete validation
+matrix, GN100 paths, environment variables, deployment order, voice tunnel, and
+post-deploy checks.
+
+- Start from `origin/main` on a `codex/` branch unless the user explicitly names
+  another base. Inspect `git status` first and never discard another task's work.
+- Treat `/home/acer01/abyss-demo` as the deployed application. The legacy
+  `/home/acer01/abyss` tree supplies the read-only knowledge catalog and existing
+  machine-local runtime configuration; do not deploy application source there.
+- Keep `/home/acer01/abyss-demo/data/abyss-state.db` writable and separate from
+  `/home/acer01/abyss/services/api/abyss.db`, which is read-only catalog evidence.
+- Build and test the domain package, FastAPI service, React frontend, voice path,
+  authenticated Hermes path, and persistence boundaries affected by the change.
+- Sync tracked source only. Never overwrite either database, runtime `.env`,
+  virtual environment, uploaded documents, credentials, or machine-generated data.
+- Prefer the installed systemd services. If they are not installed and sudo is
+  unavailable, use the documented user-owned process fallback and report that
+  operational limitation explicitly.
+- A deployment is not complete until the remote revision is identified, API and
+  frontend health checks pass, catalog/state separation is visible in health
+  output, and the changed user flow has been exercised through the served UI.
+- Handoff must include the commit/branch, validation commands and outcomes,
+  deployed URLs, service mode (systemd or user-owned), and any remaining manual
+  operator step.
 
 ## Hermes usage
 
