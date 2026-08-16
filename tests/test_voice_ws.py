@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from services.api.app import db
 
@@ -12,6 +13,17 @@ FASTAPI_AVAILABLE = importlib.util.find_spec("fastapi") is not None
 
 @unittest.skipUnless(FASTAPI_AVAILABLE, "FastAPI is installed in the API runtime")
 class VoiceJourneySnapshotTests(unittest.TestCase):
+    def test_spoken_mri_intake_prioritizes_body_area_over_dates(self) -> None:
+        from services.api.app.api import _intake_reply
+
+        journey = SimpleNamespace(onboarding_questions=(
+            "What date do you expect to receive this care?",
+            "When does your current coverage end?",
+            "What body area is the MRI for, and was it ordered with or without contrast?",
+        ))
+        reply = _intake_reply(journey, continuing=False, voice=True)
+        self.assertIn("What body area", reply)
+
     def test_reads_the_persisted_snapshot_column(self) -> None:
         from services.api.app.ws import _voice_journey_snapshot
 

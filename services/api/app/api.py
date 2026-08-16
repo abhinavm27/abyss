@@ -436,6 +436,7 @@ def _intake_reply(
         # Spoken turns should ask one thing at a time. Procedure specificity is
         # needed to query the catalog, so ask it before timing or coverage.
         priorities = (
+            "body area",
             "body area and specific type",
             "which blood test",
             "without contrast or with contrast",
