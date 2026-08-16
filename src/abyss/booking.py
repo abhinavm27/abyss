@@ -338,3 +338,13 @@ class SandboxBookingService:
         with self._lock:
             self._slots[slot.slot_id] = confirmed
         return confirmed
+
+    def restore_available_slot(self, slot: BookingSlot) -> BookingSlot:
+        """Restore seeded availability without overwriting a later slot state."""
+        available = replace(slot, status="available")
+        with self._lock:
+            existing = self._slots.get(slot.slot_id)
+            if existing is not None:
+                return existing
+            self._slots[slot.slot_id] = available
+        return available

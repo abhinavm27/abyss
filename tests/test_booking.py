@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from abyss.booking import (
     BookingAgent,
     BookingPreferences,
+    BookingSlot,
     SandboxBookingService,
 )
 
@@ -14,6 +15,16 @@ class FakePreferenceModel:
 
 
 class BookingTests(unittest.TestCase):
+    def test_available_slot_can_be_restored_without_overwriting_later_state(self):
+        service = SandboxBookingService()
+        slot = BookingSlot(
+            "slot-restored", 7, "Synthetic Hospital", "73721",
+            "2026-09-04T10:30:00-07:00", 45,
+        )
+        restored = service.restore_available_slot(slot)
+        self.assertEqual(restored.status, "available")
+        self.assertEqual(service.slot(slot.slot_id), restored)
+
     def test_booking_agent_returns_validated_preferences(self) -> None:
         preferences = BookingAgent(FakePreferenceModel()).collect_preferences(
             "Any time from August 30 to September 15",

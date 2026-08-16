@@ -475,6 +475,65 @@ def _restore_intake_journey(
     return journey
 
 
+def _restore_booking_journey(
+    conn: sqlite3.Connection, journey_id: str | None, user_id: int
+) -> CareJourney | None:
+    """Restore a selected, verified sandbox care path after an API restart.
+
+    Persisted consent records are deliberately not restored as action
+    authority. The user must still grant the exact booking approval in the
+    current runtime before an adapter can execute.
+    """
+    if not journey_id:
+        return None
+    row = conn.execute(
+        """SELECT snapshot_json FROM care_journey
+           WHERE journey_id=? AND user_id=? AND stage='book' AND status='active'""",
+        (journey_id, user_id),
+    ).fetchone()
+    if row is None:
+        return None
+    snapshot = json.loads(row["snapshot_json"])
+    path_data = snapshot.get("selected_care_path")
+    if not path_data or path_data.get("network_status") != "sandbox_verified":
+        return None
+    journey = CareJourney.open(
+        journey_id, user_id=str(user_id), **_journey_dependencies()
+    )
+    journey.workflow.stage = WorkflowStage.BOOK
+    journey.current_plan_id = str(path_data["plan_id"])
+    journey.selected_care_path = CarePathSelection(**path_data)
+    for item in snapshot.get("facts", []):
+        consent = item.get("consent_requirement")
+        journey.record_fact(DecisionFact(
+            name=str(item["name"]), value=item.get("value"),
+            source=str(item["source"]),
+            observed_at=datetime.fromisoformat(item["observed_at"]),
+            confidence=float(item["confidence"]),
+            verification_status=VerificationStatus(item["verification_status"]),
+            consent_required=ConsentAction(consent) if consent else None,
+        ))
+    restored_slots: list[BookingSlot] = []
+    for item in snapshot.get("booking_slots", []):
+        slot = BookingSlot(
+            slot_id=str(item["slot_id"]), hospital_id=int(item["hospital_id"]),
+            hospital=str(item["hospital"]), procedure_code=str(item["procedure_code"]),
+            starts_at=str(item["starts_at"]), duration_minutes=int(item["duration_minutes"]),
+            status="available", source=str(item.get("source", "seeded sandbox schedule")),
+            retry_demo=bool(item.get("retry_demo")),
+        )
+        restored_slots.append(journey.booking_service.restore_available_slot(slot))
+    journey.booking_slots = restored_slots
+    selected = snapshot.get("selected_booking_slot")
+    if selected:
+        journey.selected_booking_slot = next(
+            (slot for slot in restored_slots if slot.slot_id == selected.get("slot_id")),
+            None,
+        )
+    _journeys[journey_id] = journey
+    return journey
+
+
 def _open_journey(user_id: int, *, seed_defaults: bool = True) -> CareJourney:
     journey_id = f"journey-{uuid.uuid4().hex[:12]}"
     journey = CareJourney.open(journey_id, user_id=str(user_id), **_journey_dependencies())
@@ -559,6 +618,10 @@ def care_agent_message(
                     conn, plan.target_journey_id, user_id
                 )
             if journey is None:
+                journey = _restore_booking_journey(
+                    conn, plan.target_journey_id, user_id
+                )
+            if journey is None:
                 raise RuntimeError("the selected journey is not active on this server")
             if journey.stage.value == "intake":
                 journey.onboard(body.text, source="care_journey_agent")
@@ -570,9 +633,24 @@ def care_agent_message(
                     )
                 else:
                     reply = " ".join(journey.onboarding_questions)
-            elif journey.stage.value == "book" and not journey.reschedule_original_slot:
+            elif (
+                journey.stage.value == "book"
+                and not journey.reschedule_original_slot
+                and not journey.booking_slots
+            ):
                 slots = journey.collect_booking_preferences(body.text)
                 reply = f"I found {len(slots)} matching synthetic appointment slots."
+            elif journey.stage.value == "book" and journey.booking_slots:
+                if journey.selected_booking_slot:
+                    reply = (
+                        "I restored your booking journey and selected slot. "
+                        "Review the exact appointment approval before booking."
+                    )
+                else:
+                    reply = (
+                        f"I restored your booking journey with {len(journey.booking_slots)} "
+                        "available synthetic slots. Choose one to continue."
+                    )
             else:
                 reply = f"I resumed {journey.journey_id} at the {journey.stage.value} stage."
         elif plan.intent == JourneyIntent.RESCHEDULE_APPOINTMENT:
