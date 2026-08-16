@@ -109,6 +109,44 @@ def _explicit_intake_fallback(
     ]
 
 
+def extract_explicit_facts(
+    text: str, *, source: str, observed_at: datetime | None = None
+) -> list[DecisionFact]:
+    """Extract only narrow source-backed phrases that need no interpretation."""
+    if not text.strip() or not source.strip():
+        raise ValueError("text and source are required")
+    timestamp = observed_at or datetime.now(UTC)
+    facts = _explicit_intake_fallback(
+        text,
+        source=source,
+        observed_at=timestamp,
+    )
+    normalized = " ".join(text.lower().replace("-", " ").split())
+    procedure: str | None = None
+    if (
+        ("cbc" in normalized or "complete blood count" in normalized)
+        and ("differential" in normalized or " diff" in normalized)
+    ):
+        procedure = "Complete blood count with differential"
+    elif (
+        "ultrasound" in normalized
+        and "complete" in normalized
+        and ("abdomen" in normalized or "abdominal" in normalized)
+    ):
+        procedure = "Complete abdominal ultrasound"
+    if procedure and not any(fact.name == "requested_procedure" for fact in facts):
+        facts.insert(0, DecisionFact(
+            name="requested_procedure",
+            value=procedure,
+            source=source,
+            observed_at=timestamp,
+            confidence=1.0,
+            verification_status=VerificationStatus.SOURCE_BACKED,
+            consent_required=ConsentAction.PROCESS_DOCUMENTS,
+        ))
+    return facts
+
+
 def explain(question: str, evidence: dict[str, Any], client: HermesClient | None = None) -> str:
     """Explain evidence without delegating calculations or decisions to the model."""
     if not question.strip():

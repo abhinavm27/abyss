@@ -80,7 +80,7 @@ class CareJourney:
         self.memory.append(self.workflow.care_state.session_id, f"fact-{len(self.memory.records(self.workflow.care_state.session_id)) + 1}", fact)
         self.audit.append(self.journey_id, "fact_recorded", actor="journey", payload={"name": fact.name, "status": fact.verification_status.value})
 
-    def onboard(self, text: str, *, source: str):
+    def onboard(self, text: str, *, source: str, prefer_explicit: bool = False):
         """Run bounded intake extraction and store candidate facts.
 
         The agent may propose facts; the ledger preserves their inferred state.
@@ -95,6 +95,7 @@ class CareJourney:
         proposal = self.onboarding_agent.extract(
             text,
             source=source,
+            prefer_explicit=prefer_explicit,
             context={
                 "existing_facts": existing_facts,
                 "pending_fields": list(self.onboarding_missing),

@@ -18,6 +18,22 @@ class FakeModel:
 
 
 class AgentRoleTests(TestCase):
+    def test_explicit_pending_cbc_reply_does_not_call_model(self):
+        class FailingModel:
+            def chat(self, messages, **kwargs):
+                raise AssertionError("exact pending reply should not call the model")
+
+        proposal = OnboardingAgent(FailingModel()).extract(
+            "CBC with differential.",
+            source="user_request",
+            prefer_explicit=True,
+        )
+        self.assertEqual(proposal.facts[0].name, "requested_procedure")
+        self.assertEqual(
+            proposal.facts[0].value,
+            "Complete blood count with differential",
+        )
+
     def test_onboarding_extracts_candidate_facts_only(self):
         model = FakeModel(json.dumps({"facts": [{"name": "procedure", "value": "73721", "confidence": 0.9}]}))
         proposal = OnboardingAgent(model).extract("knee MRI", source="synthetic-referral")

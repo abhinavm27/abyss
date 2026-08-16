@@ -23,6 +23,38 @@ class SequencedPlanner:
 
 
 class CareJourneyAgentTests(unittest.TestCase):
+    def test_explicit_pending_reply_skips_semantic_replanning(self) -> None:
+        context = {
+            "journeys": [{
+                "journey_id": "journey-blood",
+                "stage": "intake",
+                "pending_fields": ["procedure_code_confirmation"],
+                "pending_questions": ["Which blood test was ordered?"],
+            }],
+        }
+        plan = CareJourneyAgent.pending_reply_plan(
+            context,
+            "journey-blood",
+            utterance_id="utterance-1",
+            correlation_id="correlation-1",
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.intent, JourneyIntent.CONTINUE_JOURNEY)
+        self.assertEqual(plan.target_journey_id, "journey-blood")
+        self.assertEqual(plan.source, "explicit_pending_reply")
+
+    def test_pending_reply_fast_path_requires_exact_active_intake(self) -> None:
+        context = {"journeys": [{
+            "journey_id": "journey-complete",
+            "stage": "complete",
+            "pending_fields": [],
+        }]}
+        self.assertIsNone(CareJourneyAgent.pending_reply_plan(
+            context,
+            "journey-complete",
+            utterance_id="utterance-2",
+            correlation_id="correlation-2",
+        ))
     def setUp(self) -> None:
         self.context = {
             "user": {"user_id": "7"},

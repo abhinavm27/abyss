@@ -160,6 +160,7 @@ class CareAgentMessageIn(BaseModel):
     utterance_id: str | None = Field(default=None, max_length=200)
     correlation_id: str | None = Field(default=None, max_length=200)
     channel: str = Field(default="chat", pattern="^(chat|voice)$")
+    reply_to_pending: bool = False
 
 
 class JourneyRescheduleIn(BaseModel):
@@ -376,6 +377,38 @@ def _prepare_chat_care_options(journey: CareJourney) -> bool:
     return True
 
 
+def _care_options_reply(journey: CareJourney) -> str:
+    """Lead with the useful result and the next safe action."""
+    count = len(journey.current_plan_options)
+    plan_name = journey.catalogs.plan(journey.current_plan_id).name
+    if not count:
+        return (
+            f"I resolved the order under your current {plan_name}, but the catalog has no "
+            "published hospital rates for it yet. I kept the journey ready so we can add "
+            "catalog coverage without changing your insurance."
+        )
+    best = journey.current_plan_options[0]
+    return (
+        f"Done — I found {count} hospital options under your current {plan_name}. "
+        f"The lowest current-plan scenario is {best.hospital} at about "
+        f"${best.estimated_member_cost:,.0f} member cost. I opened the comparison; "
+        "network verification happens only after you choose a hospital."
+    )
+
+
+def _intake_reply(journey: CareJourney, *, continuing: bool) -> str:
+    questions = list(dict.fromkeys(journey.onboarding_questions))
+    if not questions:
+        return "I have the intake details. I’m checking your current-plan hospital options now."
+    lead = "Thanks — I saved that." if continuing else "Absolutely — I can help with that."
+    if len(questions) == 1:
+        return f"{lead} {questions[0]}"
+    return (
+        f"{lead} I need {len(questions)} details before I can match hospitals accurately: "
+        f"{' '.join(questions)} You can answer them together in one message."
+    )
+
+
 def _restore_completed_journey(
     conn: sqlite3.Connection, journey_id: str | None, user_id: int
 ) -> CareJourney | None:
@@ -589,13 +622,23 @@ def care_agent_message(
     correlation_id = body.correlation_id or f"correlation-{uuid.uuid4().hex[:12]}"
     plan = None
     try:
-        plan = _care_journey_agent.plan(
-            body.text,
-            context=context,
-            active_journey_id=body.active_journey_id,
-            utterance_id=utterance_id,
-            correlation_id=correlation_id,
+        plan = (
+            _care_journey_agent.pending_reply_plan(
+                context,
+                body.active_journey_id,
+                utterance_id=utterance_id,
+                correlation_id=correlation_id,
+            )
+            if body.reply_to_pending else None
         )
+        if plan is None:
+            plan = _care_journey_agent.plan(
+                body.text,
+                context=context,
+                active_journey_id=body.active_journey_id,
+                utterance_id=utterance_id,
+                correlation_id=correlation_id,
+            )
         journey = _owned_journey(plan.target_journey_id, user_id)
         reply: str
         if plan.intent == JourneyIntent.NEW_CARE_REQUEST:
@@ -609,13 +652,9 @@ def care_agent_message(
                 ))
             journey.onboard(body.text, source="care_journey_agent")
             if _prepare_chat_care_options(journey):
-                reply = (
-                    f"I found {len(journey.current_plan_options)} hospital options under your "
-                    f"current {journey.catalogs.plan(journey.current_plan_id).name}. "
-                    "Choose a hospital below; your insurance is not changing."
-                )
+                reply = _care_options_reply(journey)
             else:
-                reply = " ".join(journey.onboarding_questions)
+                reply = _intake_reply(journey, continuing=False)
         elif plan.intent == JourneyIntent.CONTINUE_JOURNEY:
             if journey is None:
                 journey = _restore_intake_journey(
@@ -628,15 +667,15 @@ def care_agent_message(
             if journey is None:
                 raise RuntimeError("the selected journey is not active on this server")
             if journey.stage.value == "intake":
-                journey.onboard(body.text, source="care_journey_agent")
+                journey.onboard(
+                    body.text,
+                    source="care_journey_agent",
+                    prefer_explicit=plan.source == "explicit_pending_reply",
+                )
                 if _prepare_chat_care_options(journey):
-                    reply = (
-                        f"I found {len(journey.current_plan_options)} hospital options under your "
-                        f"current {journey.catalogs.plan(journey.current_plan_id).name}. "
-                        "Choose a hospital below; your insurance is not changing."
-                    )
+                    reply = _care_options_reply(journey)
                 else:
-                    reply = " ".join(journey.onboarding_questions)
+                    reply = _intake_reply(journey, continuing=True)
             elif (
                 journey.stage.value == "book"
                 and not journey.reschedule_original_slot

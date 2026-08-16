@@ -82,10 +82,10 @@ const sceneCopy: Record<Scene, { title: string; eyebrow: string; status: string 
 };
 
 const agentSteps = [
-  { name: "Onboarding", detail: "Care request understood" },
-  { name: "Knowledge", detail: "Coverage facts sourced" },
-  { name: "Matching", detail: "Three paths evaluated" },
-  { name: "Scheduler", detail: "Appointment verified" },
+  { name: "Onboarding", detail: "Extract request facts" },
+  { name: "Knowledge", detail: "Resolve catalog evidence" },
+  { name: "Matching", detail: "Rank current-plan hospitals" },
+  { name: "Scheduler", detail: "Prepare booking handoff" },
 ];
 
 function useIsMobile() {
@@ -402,6 +402,37 @@ function CompleteCard({ journey, onAppointments, onReset }: { journey: CareJourn
 }
 
 type ChatTurn = { role: "user" | "assistant"; text: string };
+type ChatSuggestion = { label: string; text: string };
+
+const CHAT_PROGRESS = [
+  "Got it — reading that with your journey context",
+  "Onboarding Agent is updating only the facts you supplied",
+  "Knowledge Agent is checking the procedure catalog",
+  "Preparing current-plan hospital options",
+];
+
+function likelyPendingReply(text: string, journey: CareJourneySnapshot | null): boolean {
+  if (journey?.stage !== "intake" || journey.onboarding_questions.length === 0) return false;
+  return !/\b(new|another|different|separate|reschedule|cancel|status|all journeys|start over)\b/i.test(text);
+}
+
+function suggestionsFor(journey: CareJourneySnapshot | null): ChatSuggestion[] {
+  if (!journey || journey.stage !== "intake") {
+    return [
+      { label: "Book a knee MRI", text: "I need to book a knee MRI." },
+      { label: "Book a blood test", text: "I need to book a blood test." },
+      { label: "Reschedule care", text: "I need to reschedule an appointment." },
+    ];
+  }
+  const questions = journey.onboarding_questions.join(" ").toLowerCase();
+  const suggestions: ChatSuggestion[] = [];
+  if (questions.includes("blood test")) suggestions.push({ label: "CBC with differential", text: "CBC with differential." });
+  if (questions.includes("without contrast") || questions.includes("with contrast")) suggestions.push({ label: "Without contrast", text: "Without contrast." });
+  if (questions.includes("ultrasound")) suggestions.push({ label: "Complete abdominal", text: "Complete abdominal ultrasound." });
+  if (questions.includes("date") || questions.includes("coverage end")) suggestions.push({ label: "Add care dates", text: "Care by August 30; my coverage ends September 30." });
+  suggestions.push({ label: "Upload the order", text: "I’ll upload the clinician order instead." });
+  return suggestions.slice(0, 3);
+}
 
 function appointmentsFromContext(context: CareContext): VelaAppointment[] {
   return context.appointments.map((item) => {
@@ -432,11 +463,16 @@ function appointmentsFromContext(context: CareContext): VelaAppointment[] {
   });
 }
 
-function ChatPanel({ turns, value, busy, onValue, onSend }: { turns: ChatTurn[]; value: string; busy: boolean; onValue: (value: string) => void; onSend: () => void }) {
+function ChatPanel({ turns, value, busy, busyLabel, suggestions, onValue, onSend, onSuggestion }: { turns: ChatTurn[]; value: string; busy: boolean; busyLabel: string; suggestions: ChatSuggestion[]; onValue: (value: string) => void; onSend: () => void; onSuggestion: (text: string) => void }) {
+  const turnsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = turnsRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [busy, turns]);
   return (
     <section className="vela-chat-panel" aria-label="Chat with VELA">
-      <div className="vela-chat-turns">
-        {turns.slice(-2).map((turn, index) => (
+      <div className="vela-chat-turns" ref={turnsRef} aria-live="polite">
+        {turns.slice(-4).map((turn, index) => (
           <div className={`vela-chat-turn is-${turn.role}`} key={`${turn.role}-${index}`}>
             <span>{turn.role === "assistant" ? "VELA" : "You"}</span>
             <p>{turn.text}</p>
@@ -444,11 +480,9 @@ function ChatPanel({ turns, value, busy, onValue, onSend }: { turns: ChatTurn[];
         ))}
         {busy && (
           <div className="vela-chat-turn is-assistant is-typing">
-            <span>VELA is reasoning</span>
+            <span>Working with your care team</span>
             <p>
-              <i />
-              <i />
-              <i />
+              <b>{busyLabel}</b><i /><i /><i />
             </p>
           </div>
         )}
@@ -466,12 +500,7 @@ function ChatPanel({ turns, value, busy, onValue, onSend }: { turns: ChatTurn[];
         </button>
       </form>
       <div className="vela-chat-suggestions">
-        <button type="button" onClick={() => onValue("I need a knee MRI and want to understand what it will cost.")}>
-          I need an MRI
-        </button>
-        <button type="button" onClick={() => onValue("Help me compare my insurance options.")}>
-          Compare coverage
-        </button>
+        {suggestions.map((suggestion) => <button type="button" disabled={busy} key={suggestion.label} onClick={() => onSuggestion(suggestion.text)}>{suggestion.label}</button>)}
       </div>
     </section>
   );
@@ -523,6 +552,7 @@ export function VelaExperience() {
   const [notice, setNotice] = useState<string | null>(null);
   const [chatValue, setChatValue] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [chatProgressIndex, setChatProgressIndex] = useState(0);
   const [chatStarted, setChatStarted] = useState(false);
   const [chatVisualProgress, setChatVisualProgress] = useState(0);
   const [voiceStarted, setVoiceStarted] = useState(false);
@@ -612,6 +642,19 @@ export function VelaExperience() {
     if (index >= sceneOrder.indexOf("recommendation")) return 4;
     return Math.max(0, index - 1);
   }, [index, scene]);
+  const chatSuggestions = useMemo(() => suggestionsFor(journey), [journey]);
+
+  useEffect(() => {
+    if (!chatBusy) {
+      setChatProgressIndex(0);
+      return;
+    }
+    const timer = window.setInterval(
+      () => setChatProgressIndex((current) => Math.min(current + 1, CHAT_PROGRESS.length - 1)),
+      4200,
+    );
+    return () => window.clearInterval(timer);
+  }, [chatBusy]);
   const verificationCopy: ConsentCopy = {
     title: "Approve provider and network verification.",
     description: journey?.selected_care_path ? `VELA will verify ${journey.selected_care_path.hospital} against your current ${journey.selected_care_path.plan_name}.` : "Choose a hospital before verification.",
@@ -650,7 +693,12 @@ export function VelaExperience() {
         const active = context.journeys.find((item) => item.status === "active") ?? context.journeys[0];
         if (active) {
           const snapshot = await api.journey(active.journey_id);
-          if (!cancelled) adoptJourney(snapshot, context);
+          if (!cancelled) {
+            adoptJourney(snapshot, context);
+            if (snapshot.stage === "intake" && snapshot.onboarding_questions.length > 0) {
+              setChatTurns([{ role: "assistant", text: `Welcome back — I kept your progress. ${snapshot.onboarding_questions.join(" ")}` }]);
+            }
+          }
         }
         setAppointments(appointmentsFromContext(context));
       })
@@ -717,8 +765,8 @@ export function VelaExperience() {
     }
   };
 
-  const sendChat = async () => {
-    const text = chatValue.trim();
+  const sendChat = async (suggestedText?: string) => {
+    const text = (suggestedText ?? chatValue).trim();
     if (!text) return;
     setChatStarted(true);
     setChatVisualProgress((current) => Math.min(0.62, current + 0.08));
@@ -729,7 +777,11 @@ export function VelaExperience() {
       if (liveMode && voice.isActive) {
         voice.sendText(text);
       } else if (liveMode) {
-        const response = await api.careAgentMessage(text, journey?.journey_id);
+        const response = await api.careAgentMessage(
+          text,
+          journey?.journey_id,
+          likelyPendingReply(text, journey),
+        );
         adoptAgentResponse(response);
       } else {
         await new Promise((resolve) => window.setTimeout(resolve, 420));
@@ -984,7 +1036,7 @@ export function VelaExperience() {
                 </p>
               </>
             )}
-            {inputMode === "chat" && <ChatPanel turns={chatTurns} value={chatValue} busy={chatBusy} onValue={setChatValue} onSend={sendChat} />}
+            {inputMode === "chat" && <ChatPanel turns={chatTurns} value={chatValue} busy={chatBusy} busyLabel={CHAT_PROGRESS[chatProgressIndex]} suggestions={chatSuggestions} onValue={setChatValue} onSend={() => void sendChat()} onSuggestion={(text) => void sendChat(text)} />}
 
             {scene === "listening" && inputMode === "voice" && (
               <div className="vela-start">

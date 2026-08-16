@@ -402,14 +402,16 @@ button { color: inherit; }
 .vela-listener { transform: scale(calc(1 + var(--energy, 0) * .035)); }
 
 .vela-chat-panel { position: relative; z-index: 8; width: min(640px, 92%); margin-top: 24px; text-align: left; pointer-events: auto; }
-.vela-chat-turns { display: grid; gap: 10px; max-height: 190px; padding: 0 8px 14px; overflow-y: auto; }
+.vela-chat-turns { display: grid; gap: 10px; max-height: min(34dvh, 310px); padding: 0 8px 14px; overflow-y: auto; scroll-behavior: smooth; }
 .vela-chat-turn { max-width: 76%; }
 .vela-chat-turn > span { display: block; margin: 0 0 4px 5px; color: #8490a0; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .vela-chat-turn p { margin: 0; padding: 10px 14px; border: 1px solid rgba(54,119,166,.09); border-radius: 15px 15px 15px 4px; color: #354e70; background: rgba(244,250,251,.7); font-size: 12px; line-height: 1.5; backdrop-filter: blur(12px); }
 .vela-chat-turn.is-user { justify-self: end; }
 .vela-chat-turn.is-user > span { text-align: right; }
 .vela-chat-turn.is-user p { border-radius: 14px 14px 4px 14px; color: #fff; background: #1776c3; }
-.vela-chat-turn.is-typing p { display: flex; gap: 4px; width: 50px; }
+.vela-chat-turn.is-typing { max-width: min(92%, 470px); }
+.vela-chat-turn.is-typing p { display: flex; align-items: center; gap: 4px; width: auto; }
+.vela-chat-turn.is-typing b { margin-right: 5px; font-size: 11px; font-weight: 500; }
 .vela-chat-turn.is-typing i { width: 5px; height: 5px; border-radius: 50%; background: #71a5c6; animation: vela-typing .8s ease-in-out infinite alternate; }
 .vela-chat-turn.is-typing i:nth-child(2) { animation-delay: .15s; }.vela-chat-turn.is-typing i:nth-child(3) { animation-delay: .3s; }
 @keyframes vela-typing { to { transform: translateY(-4px); opacity: .4; } }
@@ -420,6 +422,8 @@ button { color: inherit; }
 .vela-chat-panel form button:disabled { opacity: .35; }.vela-chat-panel form svg { width: 16px; }
 .vela-chat-suggestions { display: flex; justify-content: center; gap: 7px; padding: 9px 12px 0; }
 .vela-chat-suggestions button { padding: 6px 10px; border: 1px solid rgba(31,88,133,.13); border-radius: 100px; color: #5d718d; background: rgba(255,255,255,.55); font-size: 10px; cursor: pointer; }
+.vela-chat-suggestions button:hover:not(:disabled) { color: #126cad; border-color: rgba(19,119,189,.3); background: rgba(255,255,255,.88); transform: translateY(-1px); }
+.vela-chat-suggestions button:disabled { opacity: .42; cursor: wait; }
 
 .vela-tab-stage { overflow-y: auto; background: linear-gradient(160deg,#fbfaf7,#f7f8f6); }
 .vela-tab-page { width: 100%; min-height: 100%; padding: 52px 5.5% 70px; text-align: left; }
@@ -670,7 +674,7 @@ button { color: inherit; }
   .vela-stage.is-chat-mode .vela-stage-content > h1 { max-width: 84%; font-size: 38px; }
   .vela-stage.is-chat-mode .vela-chat-turns { top: calc(218px + env(safe-area-inset-top)); left: 20px; width: calc(100% - 70px); height: 205px; }
   .vela-stage.is-chat-mode .vela-chat-panel form { position: fixed; z-index: 31; bottom: calc(88px + env(safe-area-inset-bottom)); left: 14px; width: calc(100% - 28px); }
-  .vela-stage.is-chat-mode .vela-chat-suggestions { display: none; }
+  .vela-stage.is-chat-mode .vela-chat-suggestions { position: fixed; z-index: 31; bottom: calc(148px + env(safe-area-inset-bottom)); left: 14px; display: flex; width: calc(100% - 28px); padding: 0; overflow-x: auto; }
   .vela-chat-document-dock { position: fixed; z-index: 29; top: 48%; right: 8px; padding: 7px 5px; }
   .vela-chat-document-dock > span { display: none; }
   .vela-chat-document-dock button { width: 48px; height: 48px; }

@@ -653,10 +653,14 @@ export const api = {
 
   careContext: () => req<CareContext>("/api/care-context"),
 
-  careAgentMessage: (text: string, activeJourneyId?: string | null) =>
+  careAgentMessage: (text: string, activeJourneyId?: string | null, replyToPending = false) =>
     req<CareAgentResponse>("/api/care-agent/messages", {
       method: "POST",
-      body: JSON.stringify({ text, active_journey_id: activeJourneyId ?? null }),
+      body: JSON.stringify({
+        text,
+        active_journey_id: activeJourneyId ?? null,
+        reply_to_pending: replyToPending,
+      }),
     }),
 
   startJourney: (body?: { procedure?: string; provider?: string; facility?: string }) =>

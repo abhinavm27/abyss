@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .agent import AgentOutputError, extract_facts, explain
+from .agent import AgentOutputError, explain, extract_explicit_facts, extract_facts
 from .domain import DecisionFact
 from .evaluation import PathEvaluation
 from .hermes_client import HermesClient
@@ -34,11 +34,18 @@ class OnboardingAgent:
         self.client = client
 
     def extract(
-        self, text: str, *, source: str, context: dict[str, Any] | None = None
+        self,
+        text: str,
+        *,
+        source: str,
+        context: dict[str, Any] | None = None,
+        prefer_explicit: bool = False,
     ) -> FactProposal:
-        facts = extract_facts(
-            text, source=source, context=context, client=self.client
-        )  # type: ignore[arg-type]
+        facts = extract_explicit_facts(text, source=source) if prefer_explicit else []
+        if not facts:
+            facts = extract_facts(
+                text, source=source, context=context, client=self.client
+            )  # type: ignore[arg-type]
         names = {fact.name for fact in facts}
         required = {
             "requested_procedure": "What care or procedure are you trying to arrange?",

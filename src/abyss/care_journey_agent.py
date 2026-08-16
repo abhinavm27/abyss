@@ -90,6 +90,46 @@ class CareJourneyAgent:
     def __init__(self, client: HermesClient | JourneyPlanningModel | None = None) -> None:
         self.client = client
 
+    @staticmethod
+    def pending_reply_plan(
+        context: dict,
+        active_journey_id: str | None,
+        *,
+        utterance_id: str,
+        correlation_id: str,
+    ) -> JourneyPlan | None:
+        """Correlate an explicit UI reply with its open intake question.
+
+        This is transport/orchestration state, not semantic interpretation. The
+        Onboarding Agent still extracts the answer and the deterministic catalog
+        still validates it. Requests without an exact active pending journey go
+        through normal model planning.
+        """
+        if not active_journey_id:
+            return None
+        active = next(
+            (
+                item for item in context.get("journeys", [])
+                if item.get("journey_id") == active_journey_id
+            ),
+            None,
+        )
+        if not active or active.get("stage") != "intake" or not active.get("pending_fields"):
+            return None
+        return JourneyPlan(
+            intent=JourneyIntent.CONTINUE_JOURNEY,
+            correlation_id=correlation_id,
+            utterance_id=utterance_id,
+            target_journey_id=active_journey_id,
+            target_appointment_id=None,
+            steps=("extract_pending_answer", "refresh_intake_state"),
+            reuse=("pending_questions", "intake_facts"),
+            refresh=("pending_fields",),
+            missing=(),
+            source="explicit_pending_reply",
+            confidence=1.0,
+        )
+
     def plan(
         self,
         text: str,
