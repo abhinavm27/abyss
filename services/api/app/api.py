@@ -391,7 +391,12 @@ def _owned_journey(journey_id: str | None, user_id: int) -> CareJourney | None:
 
 def _prepare_chat_care_options(journey: CareJourney) -> bool:
     """Advance a complete chat-only intake through read-only comparison."""
-    if journey.stage.value != "intake" or journey.onboarding_missing:
+    required = {"requested_procedure", "procedure_code", "service_date", "coverage_end_date"}
+    if (
+        journey.stage.value != "intake"
+        or journey.onboarding_missing
+        or not required.issubset(journey.workflow.care_state.facts)
+    ):
         return False
     journey.prepare_chat_care_options()
     return True
